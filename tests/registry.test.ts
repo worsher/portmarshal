@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Registry } from "../src/registry.js";
+import net from "node:net";
+import { Registry, isPortFree } from "../src/registry.js";
 
 async function tmpRegistry(): Promise<Registry> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-test-"));
@@ -147,6 +148,28 @@ test("markReleasedByPort 把活跃记录转为 released", async () => {
   const entries = await r.load();
   assert.equal(entries[0].released, true);
   assert.equal(entries[0].lastPort, 3000);
+});
+
+test("isPortFree 探测仅绑定 ::1 (IPv6) 的监听者", async (t) => {
+  const srv = net.createServer();
+  const bound = await new Promise<boolean>((resolve) => {
+    srv.once("error", () => {
+      resolve(false);
+    });
+    srv.listen({ port: 0, host: "::1" }, () => resolve(true));
+  });
+  if (!bound) {
+    t.skip("此环境不支持 IPv6 (::1)，跳过该断言");
+    return;
+  }
+  const address = srv.address();
+  const port = typeof address === "object" && address !== null ? address.port : -1;
+  assert.notEqual(port, -1);
+
+  assert.equal(await isPortFree(port), false);
+
+  await new Promise<void>((resolve) => srv.close(() => resolve()));
+  assert.equal(await isPortFree(port), true);
 });
 
 test("claim 可夺取已死进程遗留的锁", async () => {

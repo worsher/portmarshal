@@ -45,6 +45,7 @@ npm install -g portmarshal
 | `portmarshal list [--json] [--all] [--project .]` | 显示监听服务的项目、来源和状态：正常、预留、未注册或漂移 |
 | `portmarshal whois <port> [--json]` | 查询端口的 PID、项目目录、完整命令和 Agent/服务来源 |
 | `portmarshal claim <name> [--prefer N] [--range A-B]` | 分配协作式粘性端口 claim；stdout 仅输出端口号 |
+| `portmarshal run <name> [--prefer N] [--restart] -- <command...>` | 预留端口并注入 `PORT` 和 `{port}`，前台监督子进程，退出自动释放 |
 | `portmarshal release <name>` | 释放 claim，不停止进程 |
 | `portmarshal stop <port\|name> [--force\|--gui]` | 通过归属护栏停止服务 |
 | `portmarshal gc [--kill-detached]` | 回收过期 claim，查看或停止脱离会话的候选服务 |
@@ -54,11 +55,12 @@ npm install -g portmarshal
 典型启动方式：
 
 ```bash
-PORT=$(portmarshal claim web --prefer 3000)
-npm run dev -- --port "$PORT"
+portmarshal run web --prefer 3000 -- npm run dev
+# 某些框架只接受 CLI 参数的情况：
+portmarshal run web --prefer 5173 -- pnpm vite --port {port}
 ```
 
-claim 是协作式租约，不是操作系统级 socket 预留。复用旧 claim 前，PortMarshal 会重新确认端口仍空闲，或者监听者仍属于同一项目；从返回端口到应用完成 bind 之间仍存在无法完全消除的交接窗口。
+`run` 预留粘性端口，注入为 `PORT` 环境变量（同时在命令中替换 `{port}` 占位符），在前台流式输出，转发信号到整个进程组，命令退出时自动释放 claim。若该端口仍被本项目旧实例监听，`run` 会拒绝启动并返回退出码 3；加 `--restart` 可先通过护栏 stop 停掉旧实例。需要自己管理进程生命周期时才用 `claim`。子进程的 stdin 不会被转发，交互式框架快捷键（如 Vite 的终端热键）不会响应——`run` 是为受监督的 dev server 设计的，不是交互式会话。
 
 ## 归属与停止护栏
 
@@ -80,7 +82,7 @@ PortMarshal 只能归属当前用户有权限读取进程元数据的监听。�
 把以下约定加入 `AGENTS.md`、`CLAUDE.md` 或编辑器的 Agent rules：
 
 ```text
-- 启动 dev server 前，先用 `PORT=$(portmarshal claim <服务名> --prefer <默认端口>)` 获取端口。
+- 用 `portmarshal run <服务名> --prefer <默认端口> -- <命令>` 启动 dev server；自动注入 PORT/{port} 并退出时释放。只在必须自己管理进程时才用 `PORT=$(portmarshal claim ...)`。
 - 用 `portmarshal list --project . --json` 和 `portmarshal whois <端口> --json` 排查冲突。
 - 用 `portmarshal stop <端口>` 停止服务；退出码 3 表示属于其他活跃服务，应展示归属并在使用 --force 前询问用户。
 ```

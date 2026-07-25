@@ -1,62 +1,10 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import { EXIT } from "./types.js";
+import { parseFlags } from "./flags.js";
+import type { Flags } from "./flags.js";
 
-export interface Flags {
-  json: boolean;
-  all: boolean;
-  force: boolean;
-  gui: boolean;
-  install: boolean;
-  killDetached: boolean;
-  project?: string;
-  prefer?: number;
-  range?: [number, number];
-  positional: string[];
-}
-
-export function parseFlags(args: string[]): Flags {
-  const f: Flags = {
-    json: false, all: false, force: false, gui: false,
-    install: false, killDetached: false, positional: [],
-  };
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    switch (a) {
-      case "--json": f.json = true; break;
-      case "--all": f.all = true; break;
-      case "--force": f.force = true; break;
-      case "--gui": f.gui = true; break;
-      case "--install": f.install = true; break;
-      case "--kill-detached": f.killDetached = true; break;
-      case "--kill-orphans": f.killDetached = true; break; // v0.2 compatibility alias
-      case "--project": f.project = args[++i]; break;
-      case "--prefer": {
-        const port = Number(args[++i]);
-        if (!Number.isInteger(port) || port < 1 || port > 65535) {
-          throw new Error("--prefer must be a TCP port between 1 and 65535");
-        }
-        f.prefer = port;
-        break;
-      }
-      case "--range": {
-        const m = /^(\d+)-(\d+)$/.exec(args[++i] ?? "");
-        if (!m) throw new Error("--range must use A-B format, for example 3000-3999");
-        const lo = Number(m[1]);
-        const hi = Number(m[2]);
-        if (lo < 1 || hi > 65535 || lo > hi) {
-          throw new Error("--range must be an ascending TCP port range within 1-65535");
-        }
-        f.range = [lo, hi];
-        break;
-      }
-      default:
-        if (a.startsWith("--")) throw new Error(`Unknown option: ${a}`);
-        f.positional.push(a);
-    }
-  }
-  return f;
-}
+export type { Flags } from "./flags.js";
 
 const HELP = `portmarshal — agent-aware local port ownership and guarded orchestration
 
@@ -64,6 +12,7 @@ Usage:
   portmarshal list [--json] [--all] [--project <dir|.>]
   portmarshal whois <port> [--json]
   portmarshal claim <name> [--prefer N] [--range A-B] [--json]
+  portmarshal run <name> [--prefer N] [--range A-B] [--project DIR] [--restart] -- <command...>
   portmarshal release <name>
   portmarshal stop <port|name> [--force|--gui] [--json]
   portmarshal gc [--kill-detached]
@@ -77,6 +26,7 @@ const COMMANDS: Record<string, () => Promise<{ default: CommandFn }>> = {
   list: () => import("./commands/list.js"),
   whois: () => import("./commands/whois.js"),
   claim: () => import("./commands/claim.js"),
+  run: () => import("./commands/run.js"),
   release: () => import("./commands/release.js"),
   stop: () => import("./commands/stop.js"),
   gc: () => import("./commands/gc.js"),

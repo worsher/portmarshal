@@ -111,3 +111,75 @@ test("--help 使用 PortMarshal 品牌和英文默认输出", async () => {
   assert.match(stdout, /^portmarshal — agent-aware local port ownership/);
   assert.match(stdout, /Usage:/);
 });
+
+function waitFree(port: number, timeoutMs = 5000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const tryOnce = () => {
+      const sock = net.connect({ port, host: "127.0.0.1" }, () => {
+        sock.destroy();
+        if (Date.now() - start > timeoutMs) reject(new Error("timeout waiting for port to free"));
+        else setTimeout(tryOnce, 150);
+      });
+      sock.on("error", () => { sock.destroy(); resolve(); });
+    };
+    tryOnce();
+  });
+}
+
+async function waitRegistryEntry(
+  name: string,
+  timeoutMs = 5000,
+): Promise<{ name: string; released?: boolean; lastPort?: number; port?: number }> {
+  const start = Date.now();
+  for (;;) {
+    try {
+      const reg = JSON.parse(await fs.readFile(path.join(stateDir, "registry.json"), "utf8")) as
+        Array<{ name: string; released?: boolean; lastPort?: number; port?: number }>;
+      const entry = reg.find((e) => e.name === name);
+      if (entry) return entry;
+    } catch { /* 文件尚未写入 */ }
+    if (Date.now() - start > timeoutMs) throw new Error(`timeout waiting for registry entry ${name}`);
+    await new Promise((r) => setTimeout(r, 150));
+  }
+}
+
+test("run: SIGTERM 转发到进程组（含孙进程）并自动 release", async () => {
+  const preferPort = 18931;
+  // sh -c 制造孙进程：sh 是子进程，真正监听的 node 是孙进程
+  const script =
+    'require("http").createServer((_q,r)=>r.end("ok")).listen(process.env.PORT,"127.0.0.1");setInterval(()=>{},1000)';
+  const runner = spawn(
+    "node",
+    [CLI, "run", "smoke-run", "--prefer", String(preferPort), "--project", projDir,
+      "--", "sh", "-c", `"${process.execPath}" -e '${script}'`],
+    { cwd: projDir, env: { ...process.env, PORTMARSHAL_STATE_DIR: stateDir }, stdio: "ignore" },
+  );
+  // 用注册表里真实分配的端口而非写死的 preferPort：若本机 18931 已被无关服务占用，
+  // claim 会换新端口，此处必须跟着换，否则 waitListening 会误命中陌生服务，
+  // finally 里的兜底 stop --force 也会误杀它。
+  let runPort = preferPort;
+  try {
+    const claimed = await waitRegistryEntry("smoke-run");
+    runPort = claimed.port ?? claimed.lastPort ?? preferPort;
+    await waitListening(runPort);
+
+    runner.kill("SIGTERM");
+    const code = await new Promise<number>((resolve) => {
+      runner.once("exit", (c, s) => resolve(s ? -1 : (c ?? -1)));
+    });
+    assert.equal(code, 143); // 128 + SIGTERM(15)：supervisor 收到信号→转发进程组→子进程被 TERM
+
+    await waitFree(runPort); // 孙进程也被组信号终止，端口已释放
+    const reg = JSON.parse(await fs.readFile(path.join(stateDir, "registry.json"), "utf8")) as
+      Array<{ name: string; released?: boolean; lastPort?: number }>;
+    const entry = reg.find((e) => e.name === "smoke-run");
+    assert.ok(entry);
+    assert.equal(entry.released, true);
+    assert.equal(entry.lastPort, runPort);
+  } finally {
+    try { runner.kill("SIGTERM"); } catch { /* 已退出 */ }
+    // 兜底：若组转发失败留下孙进程占着端口，用 stop --force 按实际 claim 到的端口清理
+    await cli(["stop", String(runPort), "--force"]).catch(() => {});
+  }
+});
