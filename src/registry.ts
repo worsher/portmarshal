@@ -224,3 +224,7 @@ export class Registry {
     });
   }
 }
+
+export function defaultClaimedBy(): string {
+  return process.env.CLAUDECODE ? "claude-code" : (process.env.TERM_PROGRAM ?? "cli");
+}

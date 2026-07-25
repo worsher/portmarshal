@@ -1,8 +1,8 @@
 import path from "node:path";
 import type { Flags } from "../cli.js";
 import { EXIT } from "../types.js";
-import { Registry, LockTimeoutError } from "../registry.js";
-import { resolveProjectDir, scanListeners } from "../scan.js";
+import { Registry, LockTimeoutError, defaultClaimedBy } from "../registry.js";
+import { projectOwnsPort } from "../scan.js";
 
 export default async function claim(flags: Flags): Promise<number> {
   const name = flags.positional[0];
@@ -13,19 +13,12 @@ export default async function claim(flags: Flags): Promise<number> {
   const project = path.resolve(flags.project ?? process.cwd());
   const registry = new Registry();
   try {
-    let scanPromise: ReturnType<typeof scanListeners> | undefined;
     const { port, reused, previousPort } = await registry.claim({
       name, project,
       prefer: flags.prefer,
       range: flags.range,
-      claimedBy: process.env.CLAUDECODE ? "claude-code" : (process.env.TERM_PROGRAM ?? "cli"),
-      portOwnedByProject: async (candidate) => {
-        scanPromise ??= scanListeners();
-        const proc = (await scanPromise).find((p) => p.ports.includes(candidate));
-        const owner = proc ? resolveProjectDir(proc) : null;
-        if (!owner) return false;
-        return owner === project || owner.startsWith(project + "/") || project.startsWith(owner + "/");
-      },
+      claimedBy: defaultClaimedBy(),
+      portOwnedByProject: projectOwnsPort(project),
     });
     if (flags.json) {
       process.stdout.write(JSON.stringify({ name, project, port, reused, previousPort }) + "\n");

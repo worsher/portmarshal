@@ -540,3 +540,15 @@ export async function terminate(
   }
   return "kill";
 }
+
+/** 生成 claim 重验证回调：候选端口的监听者是否归属该项目（含父子目录）。scan 只做一次并缓存 */
+export function projectOwnsPort(project: string): (port: number) => Promise<boolean> {
+  let scanPromise: Promise<ProcessInfo[]> | undefined;
+  return async (candidate) => {
+    scanPromise ??= scanListeners();
+    const proc = (await scanPromise).find((p) => p.ports.includes(candidate));
+    const owner = proc ? resolveProjectDir(proc) : null;
+    if (!owner) return false;
+    return owner === project || owner.startsWith(project + "/") || project.startsWith(owner + "/");
+  };
+}
