@@ -61,7 +61,9 @@ export default async function run(flags: Flags): Promise<number> {
     };
     const finish = (code: number) => {
       for (const sig of FORWARDED) process.removeListener(sig, forward);
-      void registry.release(name, project).then(() => resolve(code));
+      void registry.release(name, project)
+        .catch((e) => { process.stderr.write(`portmarshal: failed to release claim: ${(e as Error).message}\n`); })
+        .then(() => resolve(code));
     };
     for (const sig of FORWARDED) process.on(sig, forward);
     child.once("error", (err) => {
