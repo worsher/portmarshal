@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import type { DockerInfo, ListenEntry, Pm2Info, ProcessInfo, PsRow, RegistryEntry } from "./types.js";
 import { realExec, type Exec } from "./exec.js";
@@ -501,17 +502,34 @@ export function displaySource(p: ProcessInfo): string {
   return `docker:${owner}`;
 }
 
+/**
+ * macOS 上 os.tmpdir() 落在 /var/folders/...，而 /var 是指向 /private/var 的符号链接；
+ * lsof/proc 上报的进程 cwd 是内核解析后的真实路径（/private/var/...），字符串直接比较会误判为不同项目。
+ * 在比较边界统一 realpath 消除这条符号链接落差；目录若已不存在（已被清理的临时项目目录）则回退原始字符串。
+ * Linux 下 /tmp 一般不经过符号链接，realpath 通常就是原值，不影响行为。
+ */
+function realpathOrSelf(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
 export function classifyTarget(
   proc: ProcessInfo,
   callerCwd: string,
   registry: RegistryEntry[],
 ): "detached" | "own" | "foreign" {
   if (proc.source === "detached") return "detached";
+  const normalizedCwd = realpathOrSelf(callerCwd);
   const proj = resolveProjectDir(proc);
-  if (proj && (proj === callerCwd || proj.startsWith(callerCwd + "/") || callerCwd.startsWith(proj + "/"))) {
+  if (proj && (proj === normalizedCwd || proj.startsWith(normalizedCwd + "/") || normalizedCwd.startsWith(proj + "/"))) {
     return "own";
   }
-  const owned = registry.find((r) => !r.released && proc.ports.includes(r.port) && r.project === callerCwd);
+  const owned = registry.find(
+    (r) => !r.released && proc.ports.includes(r.port) && realpathOrSelf(r.project) === normalizedCwd,
+  );
   if (owned) return "own";
   return "foreign";
 }
@@ -544,11 +562,12 @@ export async function terminate(
 /** 生成 claim 重验证回调：候选端口的监听者是否归属该项目（含父子目录）。scan 只做一次并缓存 */
 export function projectOwnsPort(project: string): (port: number) => Promise<boolean> {
   let scanPromise: Promise<ProcessInfo[]> | undefined;
+  const normalizedProject = realpathOrSelf(project);
   return async (candidate) => {
     scanPromise ??= scanListeners();
     const proc = (await scanPromise).find((p) => p.ports.includes(candidate));
     const owner = proc ? resolveProjectDir(proc) : null;
     if (!owner) return false;
-    return owner === project || owner.startsWith(project + "/") || project.startsWith(owner + "/");
+    return owner === normalizedProject || owner.startsWith(normalizedProject + "/") || normalizedProject.startsWith(owner + "/");
   };
 }
