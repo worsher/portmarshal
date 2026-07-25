@@ -138,19 +138,23 @@ test("run: SIGTERM 转发到进程组（含孙进程）并自动 release", async
       "--", "sh", "-c", `"${process.execPath}" -e '${script}'`],
     { cwd: projDir, env: { ...process.env, PORTMARSHAL_STATE_DIR: stateDir }, stdio: "ignore" },
   );
-  await waitListening(runPort);
+  try {
+    await waitListening(runPort);
 
-  runner.kill("SIGTERM");
-  const code = await new Promise<number>((resolve) => {
-    runner.once("exit", (c, s) => resolve(s ? -1 : (c ?? -1)));
-  });
-  assert.equal(code, 143); // 128 + SIGTERM(15)：supervisor 收到信号→转发进程组→子进程被 TERM
+    runner.kill("SIGTERM");
+    const code = await new Promise<number>((resolve) => {
+      runner.once("exit", (c, s) => resolve(s ? -1 : (c ?? -1)));
+    });
+    assert.equal(code, 143); // 128 + SIGTERM(15)：supervisor 收到信号→转发进程组→子进程被 TERM
 
-  await waitFree(runPort); // 孙进程也被组信号终止，端口已释放
-  const reg = JSON.parse(await fs.readFile(path.join(stateDir, "registry.json"), "utf8")) as
-    Array<{ name: string; released?: boolean; lastPort?: number }>;
-  const entry = reg.find((e) => e.name === "smoke-run");
-  assert.ok(entry);
-  assert.equal(entry.released, true);
-  assert.equal(entry.lastPort, runPort);
+    await waitFree(runPort); // 孙进程也被组信号终止，端口已释放
+    const reg = JSON.parse(await fs.readFile(path.join(stateDir, "registry.json"), "utf8")) as
+      Array<{ name: string; released?: boolean; lastPort?: number }>;
+    const entry = reg.find((e) => e.name === "smoke-run");
+    assert.ok(entry);
+    assert.equal(entry.released, true);
+    assert.equal(entry.lastPort, runPort);
+  } finally {
+    try { runner.kill("SIGTERM"); } catch { /* 已退出 */ }
+  }
 });
