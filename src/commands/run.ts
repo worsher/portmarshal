@@ -4,7 +4,8 @@ import { spawn } from "node:child_process";
 import type { Flags } from "../cli.js";
 import { EXIT } from "../types.js";
 import { Registry, LockTimeoutError, defaultClaimedBy } from "../registry.js";
-import { projectOwnsPort } from "../scan.js";
+import { projectOwnsPort, scanListeners, resolveProjectDir, displaySource } from "../scan.js";
+import stop from "./stop.js";
 
 const USAGE = "Usage: portmarshal run <name> [--prefer N] [--range A-B] [--restart] -- <command...>\n";
 const FORWARDED = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
@@ -36,6 +37,23 @@ export default async function run(flags: Flags): Promise<number> {
   let port: number;
   try {
     port = await claimPort(registry, name, project, flags);
+
+    // claim 重验证保证：端口仍在监听 ⇒ 监听者归属本项目（外人占用时 claim 已换新端口）
+    const running = (await scanListeners()).find((p) => p.ports.includes(port));
+    if (running) {
+      if (!flags.restart) {
+        process.stderr.write(
+          `Port ${port} is already served by ${displaySource(running)} · ${resolveProjectDir(running) ?? "?"} · pid ${running.pid}\n` +
+          `  Command: ${running.command}\n` +
+          `  Keep using the running instance, or re-run with --restart to replace it\n`,
+        );
+        return EXIT.BLOCKED;
+      }
+      const stopped = await stop({ ...flags, project, positional: [String(port)], rest: [], force: false, gui: false, json: false });
+      if (stopped !== EXIT.OK) return stopped;
+      // stop 已把记录转 released；重新 claim 依靠 lastPort 粘回同端口并恢复 active 记录
+      port = await claimPort(registry, name, project, flags);
+    }
   } catch (e) {
     if (e instanceof LockTimeoutError) {
       process.stderr.write(`portmarshal: ${e.message}\n`);
