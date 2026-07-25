@@ -111,3 +111,46 @@ test("--help 使用 PortMarshal 品牌和英文默认输出", async () => {
   assert.match(stdout, /^portmarshal — agent-aware local port ownership/);
   assert.match(stdout, /Usage:/);
 });
+
+function waitFree(port: number, timeoutMs = 5000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const tryOnce = () => {
+      const sock = net.connect({ port, host: "127.0.0.1" }, () => {
+        sock.destroy();
+        if (Date.now() - start > timeoutMs) reject(new Error("timeout waiting for port to free"));
+        else setTimeout(tryOnce, 150);
+      });
+      sock.on("error", () => { sock.destroy(); resolve(); });
+    };
+    tryOnce();
+  });
+}
+
+test("run: SIGTERM 转发到进程组（含孙进程）并自动 release", async () => {
+  const runPort = 18931;
+  // sh -c 制造孙进程：sh 是子进程，真正监听的 node 是孙进程
+  const script =
+    'require("http").createServer((_q,r)=>r.end("ok")).listen(process.env.PORT,"127.0.0.1");setInterval(()=>{},1000)';
+  const runner = spawn(
+    "node",
+    [CLI, "run", "smoke-run", "--prefer", String(runPort), "--project", projDir,
+      "--", "sh", "-c", `"${process.execPath}" -e '${script}'`],
+    { cwd: projDir, env: { ...process.env, PORTMARSHAL_STATE_DIR: stateDir }, stdio: "ignore" },
+  );
+  await waitListening(runPort);
+
+  runner.kill("SIGTERM");
+  const code = await new Promise<number>((resolve) => {
+    runner.once("exit", (c, s) => resolve(s ? -1 : (c ?? -1)));
+  });
+  assert.equal(code, 143); // 128 + SIGTERM(15)：supervisor 收到信号→转发进程组→子进程被 TERM
+
+  await waitFree(runPort); // 孙进程也被组信号终止，端口已释放
+  const reg = JSON.parse(await fs.readFile(path.join(stateDir, "registry.json"), "utf8")) as
+    Array<{ name: string; released?: boolean; lastPort?: number }>;
+  const entry = reg.find((e) => e.name === "smoke-run");
+  assert.ok(entry);
+  assert.equal(entry.released, true);
+  assert.equal(entry.lastPort, runPort);
+});
