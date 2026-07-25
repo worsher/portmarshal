@@ -7,14 +7,17 @@ description: 本机端口服务的查询、协作式 claim 与带护栏停止。
 
 前置：`npm i -g portmarshal`（macOS 或 Linux）。查询与处置命令可用 `--json` 获得结构化输出。
 
-## 启动 dev server 之前
+## 启动 dev server
 
-先预留端口（幂等：同一项目同名重复调用返回同一端口）：
+优先用 `run`：预留端口、注入 `PORT`（命令里的 `{port}` 占位符也会被替换）、前台监督、退出自动释放：
 
 ```bash
-PORT=$(portmarshal claim <服务名> --prefer <默认端口>)
-# 然后用 $PORT 启动服务，例如：npm run dev -- --port "$PORT"
+portmarshal run <服务名> --prefer <默认端口> -- npm run dev
+portmarshal run <服务名> --prefer 5173 -- pnpm vite --port {port}
 ```
+
+- 退出码 3：同项目旧实例还在监听。想换掉它就加 `--restart`（走护栏 stop，不会误杀别人的服务）。
+- 需要自己管理进程时才用 `PORT=$(portmarshal claim <服务名> --prefer <默认端口>)`。
 
 ## 查询与排查
 

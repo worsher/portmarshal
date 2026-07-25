@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add `portmarshal run <name> -- <command...>`: claim a port, inject `PORT` and `{port}` placeholders, supervise the command in the foreground, forward signals to the whole process group, and auto-release the claim on exit
+- `run` refuses to start over a live old instance of the same project (exit code 3); `--restart` stops it through the existing ownership guard first
+
 ## 0.3.4 — 2026-07-20
 
 - Attribute PM2-managed listeners to `pm2:<app-name>` and the configured application cwd using one conditional `pm2 jlist` query

@@ -55,6 +55,7 @@ On first use, PortMarshal copies an existing `~/.portscout/registry.json` into `
 | `portmarshal list [--json] [--all] [--project .]` | List listeners with project, source, and state: active, reserved, unregistered, or drift |
 | `portmarshal whois <port> [--json]` | Inspect one port: PID, project directory, full command, agent or service source |
 | `portmarshal claim <name> [--prefer N] [--range A-B]` | Allocate a cooperative sticky port claim; stdout contains only the port number |
+| `portmarshal run <name> [--prefer N] [--restart] -- <command...>` | Claim a port, inject it as `PORT` and `{port}`, supervise the command in the foreground, auto-release on exit |
 | `portmarshal release <name>` | Release a claim without stopping its process |
 | `portmarshal stop <port\|name> [--force\|--gui]` | Stop a service behind the ownership guard |
 | `portmarshal gc [--kill-detached]` | Reap stale claims and review or stop detached service candidates |
@@ -64,11 +65,12 @@ On first use, PortMarshal copies an existing `~/.portscout/registry.json` into `
 Typical agent startup:
 
 ```bash
-PORT=$(portmarshal claim web --prefer 3000)
-npm run dev -- --port "$PORT"
+portmarshal run web --prefer 3000 -- npm run dev
+# frameworks that only accept a CLI flag:
+portmarshal run web --prefer 5173 -- pnpm vite --port {port}
 ```
 
-A claim is a cooperative lease, not an operating-system socket reservation. PortMarshal revalidates a previous claim before reusing it: a port must still be free or be attributable to the same project. There is still an unavoidable handoff window between returning a free port and the application binding it.
+`run` claims a sticky port, injects it as the `PORT` environment variable (and replaces `{port}` placeholders in the command), streams output in the foreground, forwards signals to the whole process group, and releases the claim when the command exits. If the port is still served by a previous instance of the same project, `run` refuses with exit code 3; add `--restart` to stop it through the ownership guard first. `claim` remains available for scripts that manage the process themselves.
 
 ## Attribution and safety
 
@@ -90,7 +92,7 @@ PortMarshal can only attribute listeners whose process metadata is visible to th
 Add this policy to `AGENTS.md`, `CLAUDE.md`, or your editor's agent rules:
 
 ```text
-- Before starting a dev server, get a port with `PORT=$(portmarshal claim <service> --prefer <default>)`.
+- Start dev servers with `portmarshal run <service> --prefer <default> -- <command>`; it injects PORT/{port} and auto-releases on exit. Use `PORT=$(portmarshal claim ...)` only when you must manage the process yourself.
 - Diagnose conflicts with `portmarshal list --project . --json` and `portmarshal whois <port> --json`.
 - Stop services with `portmarshal stop <port>`; exit code 3 means another active service owns it, so show the attribution and ask before using --force.
 ```
