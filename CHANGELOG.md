@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-07-25
 
 - Add `portmarshal run <name> -- <command...>`: claim a port, inject `PORT` and `{port}` placeholders, supervise the command in the foreground, forward signals to the whole process group, and auto-release the claim on exit
 - `run` refuses to start over a live old instance of the same project (exit code 3); `--restart` stops it through the existing ownership guard first
+- Fix `claim` allocating ports that are occupied by IPv6-only loopback listeners: `isPortFree` now probes both `127.0.0.1` and `::1`
+- Fix project ownership comparisons failing on symlinked paths (such as macOS `/var` → `/private/var`) by realpath-normalizing both sides
 
 ## 0.3.4 — 2026-07-20
 
