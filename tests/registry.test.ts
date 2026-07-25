@@ -153,13 +153,8 @@ test("markReleasedByPort 把活跃记录转为 released", async () => {
 test("isPortFree 探测仅绑定 ::1 (IPv6) 的监听者", async (t) => {
   const srv = net.createServer();
   const bound = await new Promise<boolean>((resolve) => {
-    srv.once("error", (e) => {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code === "EADDRNOTAVAIL" || code === "EAFNOSUPPORT" || code === "EINVAL") {
-        resolve(false);
-      } else {
-        resolve(false);
-      }
+    srv.once("error", () => {
+      resolve(false);
     });
     srv.listen({ port: 0, host: "::1" }, () => resolve(true));
   });

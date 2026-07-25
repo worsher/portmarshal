@@ -127,18 +127,41 @@ function waitFree(port: number, timeoutMs = 5000): Promise<void> {
   });
 }
 
+async function waitRegistryEntry(
+  name: string,
+  timeoutMs = 5000,
+): Promise<{ name: string; released?: boolean; lastPort?: number; port?: number }> {
+  const start = Date.now();
+  for (;;) {
+    try {
+      const reg = JSON.parse(await fs.readFile(path.join(stateDir, "registry.json"), "utf8")) as
+        Array<{ name: string; released?: boolean; lastPort?: number; port?: number }>;
+      const entry = reg.find((e) => e.name === name);
+      if (entry) return entry;
+    } catch { /* 文件尚未写入 */ }
+    if (Date.now() - start > timeoutMs) throw new Error(`timeout waiting for registry entry ${name}`);
+    await new Promise((r) => setTimeout(r, 150));
+  }
+}
+
 test("run: SIGTERM 转发到进程组（含孙进程）并自动 release", async () => {
-  const runPort = 18931;
+  const preferPort = 18931;
   // sh -c 制造孙进程：sh 是子进程，真正监听的 node 是孙进程
   const script =
     'require("http").createServer((_q,r)=>r.end("ok")).listen(process.env.PORT,"127.0.0.1");setInterval(()=>{},1000)';
   const runner = spawn(
     "node",
-    [CLI, "run", "smoke-run", "--prefer", String(runPort), "--project", projDir,
+    [CLI, "run", "smoke-run", "--prefer", String(preferPort), "--project", projDir,
       "--", "sh", "-c", `"${process.execPath}" -e '${script}'`],
     { cwd: projDir, env: { ...process.env, PORTMARSHAL_STATE_DIR: stateDir }, stdio: "ignore" },
   );
+  // 用注册表里真实分配的端口而非写死的 preferPort：若本机 18931 已被无关服务占用，
+  // claim 会换新端口，此处必须跟着换，否则 waitListening 会误命中陌生服务，
+  // finally 里的兜底 stop --force 也会误杀它。
+  let runPort = preferPort;
   try {
+    const claimed = await waitRegistryEntry("smoke-run");
+    runPort = claimed.port ?? claimed.lastPort ?? preferPort;
     await waitListening(runPort);
 
     runner.kill("SIGTERM");
@@ -156,7 +179,7 @@ test("run: SIGTERM 转发到进程组（含孙进程）并自动 release", async
     assert.equal(entry.lastPort, runPort);
   } finally {
     try { runner.kill("SIGTERM"); } catch { /* 已退出 */ }
-    // 兜底：若组转发失败留下孙进程占着端口，用 stop --force 按端口清理
+    // 兜底：若组转发失败留下孙进程占着端口，用 stop --force 按实际 claim 到的端口清理
     await cli(["stop", String(runPort), "--force"]).catch(() => {});
   }
 });
