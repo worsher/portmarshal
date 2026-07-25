@@ -8,12 +8,21 @@ export class LockTimeoutError extends Error {
   constructor() { super("Registry lock timed out; retry the command"); }
 }
 
-export async function isPortFree(port: number): Promise<boolean> {
+function probeFree(port: number, host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const srv = net.createServer();
-    srv.once("error", () => resolve(false));
-    srv.listen({ port, host: "127.0.0.1" }, () => srv.close(() => resolve(true)));
+    srv.once("error", (e) => {
+      const code = (e as NodeJS.ErrnoException).code;
+      // 本机没有该地址族（无 IPv6 环境）≠ 端口被占，视为该族上空闲
+      resolve(code === "EADDRNOTAVAIL" || code === "EAFNOSUPPORT" || code === "EINVAL");
+    });
+    srv.listen({ port, host }, () => srv.close(() => resolve(true)));
   });
+}
+
+export async function isPortFree(port: number): Promise<boolean> {
+  // 仅探 127.0.0.1 会漏掉只绑 IPv6 的监听者（如 dev server 绑 ::1），双栈都空闲才算空闲
+  return (await probeFree(port, "127.0.0.1")) && (await probeFree(port, "::1"));
 }
 
 function isAlive(pid: number): boolean {
