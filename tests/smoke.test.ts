@@ -156,5 +156,7 @@ test("run: SIGTERM 转发到进程组（含孙进程）并自动 release", async
     assert.equal(entry.lastPort, runPort);
   } finally {
     try { runner.kill("SIGTERM"); } catch { /* 已退出 */ }
+    // 兜底：若组转发失败留下孙进程占着端口，用 stop --force 按端口清理
+    await cli(["stop", String(runPort), "--force"]).catch(() => {});
   }
 });
