@@ -70,7 +70,7 @@ portmarshal run web --prefer 3000 -- npm run dev
 portmarshal run web --prefer 5173 -- pnpm vite --port {port}
 ```
 
-`run` claims a sticky port, injects it as the `PORT` environment variable (and replaces `{port}` placeholders in the command), streams output in the foreground, forwards signals to the whole process group, and releases the claim when the command exits. If the port is still served by a previous instance of the same project, `run` refuses with exit code 3; add `--restart` to stop it through the ownership guard first. `claim` remains available for scripts that manage the process themselves.
+`run` claims a sticky port, injects it as the `PORT` environment variable (and replaces `{port}` placeholders in the command), streams output in the foreground, forwards signals to the whole process group, and releases the claim when the command exits. If the port is still served by a previous instance of the same project, `run` refuses with exit code 3; add `--restart` to stop it through the ownership guard first. `claim` remains available for scripts that manage the process themselves. Stdin is not forwarded to the child, so interactive framework shortcuts (e.g. Vite's terminal hotkeys) won't respond — `run` is built for supervised dev servers, not interactive sessions.
 
 ## Attribution and safety
 

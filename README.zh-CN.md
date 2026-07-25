@@ -60,7 +60,7 @@ portmarshal run web --prefer 3000 -- npm run dev
 portmarshal run web --prefer 5173 -- pnpm vite --port {port}
 ```
 
-`run` 预留粘性端口，注入为 `PORT` 环境变量（同时在命令中替换 `{port}` 占位符），在前台流式输出，转发信号到整个进程组，命令退出时自动释放 claim。若该端口仍被本项目旧实例监听，`run` 会拒绝启动并返回退出码 3；加 `--restart` 可先通过护栏 stop 停掉旧实例。需要自己管理进程生命周期时才用 `claim`。
+`run` 预留粘性端口，注入为 `PORT` 环境变量（同时在命令中替换 `{port}` 占位符），在前台流式输出，转发信号到整个进程组，命令退出时自动释放 claim。若该端口仍被本项目旧实例监听，`run` 会拒绝启动并返回退出码 3；加 `--restart` 可先通过护栏 stop 停掉旧实例。需要自己管理进程生命周期时才用 `claim`。子进程的 stdin 不会被转发，交互式框架快捷键（如 Vite 的终端热键）不会响应——`run` 是为受监督的 dev server 设计的，不是交互式会话。
 
 ## 归属与停止护栏
 

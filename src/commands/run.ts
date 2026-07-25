@@ -7,7 +7,7 @@ import { Registry, LockTimeoutError, defaultClaimedBy } from "../registry.js";
 import { projectOwnsPort, scanListeners, resolveProjectDir, displaySource } from "../scan.js";
 import stop from "./stop.js";
 
-const USAGE = "Usage: portmarshal run <name> [--prefer N] [--range A-B] [--restart] -- <command...>\n";
+const USAGE = "Usage: portmarshal run <name> [--prefer N] [--range A-B] [--project DIR] [--restart] -- <command...>\n";
 const FORWARDED = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 export function substitutePort(args: string[], port: number): string[] {
@@ -65,7 +65,9 @@ export default async function run(flags: Flags): Promise<number> {
   const argv = substitutePort(flags.rest, port);
   process.stderr.write(`portmarshal: serving ${name}@${project} on port ${port}\n`);
   const child = spawn(argv[0], argv.slice(1), {
-    stdio: "inherit",
+    // stdin 用 ignore 而非 inherit：detached 组内子进程若读控制终端会收到 SIGTTIN 而挂起
+    // （子进程不在终端的前台进程组里）；run 只承诺转发输出，不转发输入。
+    stdio: ["ignore", "inherit", "inherit"],
     detached: true, // 子进程自成进程组：信号发给整组，覆盖 npm run dev 之下真正监听的孙进程
     env: { ...process.env, PORT: String(port) },
   });

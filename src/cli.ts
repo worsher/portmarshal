@@ -12,7 +12,7 @@ Usage:
   portmarshal list [--json] [--all] [--project <dir|.>]
   portmarshal whois <port> [--json]
   portmarshal claim <name> [--prefer N] [--range A-B] [--json]
-  portmarshal run <name> [--prefer N] [--range A-B] [--restart] -- <command...>
+  portmarshal run <name> [--prefer N] [--range A-B] [--project DIR] [--restart] -- <command...>
   portmarshal release <name>
   portmarshal stop <port|name> [--force|--gui] [--json]
   portmarshal gc [--kill-detached]
