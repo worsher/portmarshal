@@ -36,7 +36,7 @@ export default async function list(flags: Flags): Promise<number> {
     STATE_LABEL[e.state],
     e.proc ? String(e.proc.pid) : "-",
     e.proc
-      ? (e.proc.source === "detached" ? `${C.yellow}detached${C.reset}` : displaySource(e.proc))
+      ? (e.proc.source === "detached" ? `${C.yellow}${displaySource(e.proc)}${C.reset}` : displaySource(e.proc))
       : "-",
     e.reg?.name ?? "-",
     (e.proc ? resolveProjectDir(e.proc) : e.reg?.project) ?? "?",

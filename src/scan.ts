@@ -148,6 +148,75 @@ export function traceSource(pid: number, table: Map<number, PsRow>, managedServi
   return managedFallback ?? "?";
 }
 
+/**
+ * 环境变量残留溯源：detached 进程的父链已断，但 fork 时复制的环境块仍带着启动者的标记。
+ * 只查白名单 key，返回值仅为来源标签——完整 env 含 secret，绝不进入扫描结果。
+ * 优先级：agent 标记 > IDE 标记 > 终端/ssh（Cursor 内置终端同时带 vscode 标记，需先认更具体的启动者）。
+ */
+export function originFromEnv(lookup: (key: string) => string | undefined): string | null {
+  if (lookup("CLAUDECODE") === "1" || lookup("CLAUDE_CODE_ENTRYPOINT")) return "claude-code";
+  const bundle = lookup("__CFBundleIdentifier") ?? "";
+  if (/anthropic/i.test(bundle)) return "claude-code";
+  if (bundle === "com.todesktop.230313mzl4w4u92" || /cursor/i.test(bundle)) return "cursor";
+  if (/antigrav/i.test(bundle)) return "antigravity";
+  // bundle id 拿不到时（Linux / 部分派生版），用 askpass 脚本的安装路径区分 VS Code 系分支
+  const askpass = lookup("VSCODE_GIT_ASKPASS_MAIN") ?? "";
+  if (/cursor/i.test(askpass)) return "cursor";
+  if (/antigrav/i.test(askpass)) return "antigravity";
+  const term = lookup("TERM_PROGRAM");
+  if (term === "vscode" || /vscode/i.test(bundle)) return "vscode/electron";
+  if (term) return "terminal";
+  if (lookup("SSH_CONNECTION")) return "ssh";
+  return null;
+}
+
+/**
+ * macOS `ps eww -o pid=,command=` 批量输出 → pid→来源标签。
+ * 输出里命令行与 env 以空格拼接、无法精确切分，因此只按白名单 key 做带边界的正则搜索；
+ * 命令行参数恰好含 KEY=VAL 字样时可能误匹配，但白名单 key 均为启动者专属变量，风险可忽略。
+ */
+export function parseMacEnvOrigins(text: string): Map<number, string> {
+  const map = new Map<number, string>();
+  for (const line of text.split("\n")) {
+    const m = /^\s*(\d+)\s+(.+)$/.exec(line);
+    if (!m) continue;
+    const rest = m[2];
+    const lookup = (key: string) => new RegExp(`(?:^|\\s)${key}=(\\S+)`).exec(rest)?.[1];
+    const origin = originFromEnv(lookup);
+    if (origin) map.set(Number(m[1]), origin);
+  }
+  return map;
+}
+
+/** Linux /proc/<pid>/environ（NUL 分隔）→ 来源标签 */
+export function parseEnvironOrigin(text: string): string | null {
+  const env = new Map<string, string>();
+  for (const entry of text.split("\0")) {
+    const i = entry.indexOf("=");
+    if (i > 0) env.set(entry.slice(0, i), entry.slice(i + 1));
+  }
+  return originFromEnv((k) => env.get(k));
+}
+
+/** Linux: 批量读 /proc/<pid>/environ 溯源（同 uid 才可读，读不到即静默跳过） */
+export async function linuxEnvOrigins(
+  pids: number[],
+  readFile: (p: string) => Promise<string> = (p) => fs.readFile(p, "utf8"),
+): Promise<Map<number, string>> {
+  const map = new Map<number, string>();
+  await Promise.all(
+    pids.map(async (pid) => {
+      try {
+        const origin = parseEnvironOrigin(await readFile(`/proc/${pid}/environ`));
+        if (origin) map.set(pid, origin);
+      } catch {
+        /* 进程已退出或无权限 */
+      }
+    }),
+  );
+  return map;
+}
+
 /** ps -axo pid=,command= 全表输出 → pid→完整命令行 映射（一次调用替代 per-pid 查询） */
 export function parsePsCommands(text: string): Map<number, string> {
   const map = new Map<number, string>();
@@ -435,12 +504,24 @@ export async function scanListeners(exec: Exec = realExec, platform: NodeJS.Plat
       source: traceSource(pid, table, managedServices),
     };
   });
+  // detached 的进程父链已断，补一次 env 溯源（只查这几个 pid，不随监听总数增长）
+  const detachedPids = baseInfos.filter((info) => info.source === "detached").map((info) => info.pid);
+  const envOrigins = detachedPids.length === 0
+    ? new Map<number, string>()
+    : linux
+      ? await linuxEnvOrigins(detachedPids)
+      : parseMacEnvOrigins(await exec("ps", ["eww", "-o", "pid=,command=", "-p", detachedPids.join(",")]));
+  const tracedInfos = baseInfos.map((info): ProcessInfo => {
+    const origin = envOrigins.get(info.pid);
+    return origin ? { ...info, origin } : info;
+  });
+
   const [dockerPorts, pm2Owners] = await Promise.all([
-    baseInfos.some((info) => info.source === "docker") ? dockerPortOwners(exec) : [],
-    baseInfos.some((info) => info.source === "pm2") ? pm2ProcessOwners(exec) : [],
+    tracedInfos.some((info) => info.source === "docker") ? dockerPortOwners(exec) : [],
+    tracedInfos.some((info) => info.source === "pm2") ? pm2ProcessOwners(exec) : [],
   ]);
   const pm2OwnersByPid = new Map(pm2Owners.map((owner) => [owner.pid, owner]));
-  const managedInfos = baseInfos.map((info): ProcessInfo => {
+  const managedInfos = tracedInfos.map((info): ProcessInfo => {
     if (info.source !== "pm2") return info;
     const owner = findPm2Owner(info.pid, table, pm2OwnersByPid);
     if (!owner) return info;
@@ -495,6 +576,7 @@ export function resolveProjectDir(p: Omit<ProcessInfo, "cwd" | "inferredProject"
 
 export function displaySource(p: ProcessInfo): string {
   if (p.pm2) return `pm2:${p.pm2.name}`;
+  if (p.source === "detached" && p.origin) return `detached (${p.origin})`;
   if (!p.docker) return p.source;
   const owner = p.docker.composeProject && p.docker.composeService
     ? `${p.docker.composeProject}/${p.docker.composeService}`

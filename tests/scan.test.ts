@@ -5,9 +5,10 @@ import {
   inferProjectFromCommand, isNoise, parseLaunchctlList, parsePsCommands, parseLsofCwds,
   parseSsListeners, parseCgroupServiceUnit,
   parseDockerInspect, parsePm2Jlist, scanListeners, resolveProjectDir, displaySource,
+  originFromEnv, parseMacEnvOrigins, parseEnvironOrigin,
 } from "../src/scan.js";
 import type { Exec } from "../src/exec.js";
-import { LSOF_FPCN, PS_TABLE, LAUNCHCTL_LIST, PS_COMMANDS, LSOF_CWDS, SS_TLNP, CGROUP_SYSTEMD_SERVICE, CGROUP_USER_SERVICE, CGROUP_SESSION_SCOPE, DOCKER_INSPECT, PM2_JLIST } from "./fixtures.js";
+import { LSOF_FPCN, PS_TABLE, LAUNCHCTL_LIST, PS_COMMANDS, LSOF_CWDS, SS_TLNP, CGROUP_SYSTEMD_SERVICE, CGROUP_USER_SERVICE, CGROUP_SESSION_SCOPE, DOCKER_INSPECT, PM2_JLIST, PS_EWW_ENV } from "./fixtures.js";
 
 test("parseLsofListeners 解析机器格式并处理 IPv6", () => {
   const entries = parseLsofListeners(LSOF_FPCN);
@@ -299,4 +300,57 @@ test("traceSource 使用生产态 cgroup 映射识别 systemd 子进程", () => 
   // linuxServiceLabels() 按监听 pid 建图；监听者是服务子进程时，标签不在 ppid=1 的链根上。
   const managed = new Map([[14000, "systemd:openclaw-gateway.service"]]);
   assert.equal(traceSource(14000, table, managed), "systemd:openclaw-gateway.service");
+});
+
+test("originFromEnv 按 agent > IDE > 终端 优先级识别启动者", () => {
+  const env = (pairs: Record<string, string>) => (k: string) => pairs[k];
+  // agent 标记优先于 IDE/终端标记
+  assert.equal(originFromEnv(env({ CLAUDECODE: "1", TERM_PROGRAM: "vscode" })), "claude-code");
+  assert.equal(originFromEnv(env({ CLAUDE_CODE_ENTRYPOINT: "claude-desktop" })), "claude-code");
+  assert.equal(originFromEnv(env({ __CFBundleIdentifier: "com.anthropic.claudefordesktop" })), "claude-code");
+  // Cursor 的 to-desktop bundle id 优先于 TERM_PROGRAM=vscode（Cursor 内置终端两者都带）
+  assert.equal(originFromEnv(env({ __CFBundleIdentifier: "com.todesktop.230313mzl4w4u92", TERM_PROGRAM: "vscode" })), "cursor");
+  assert.equal(originFromEnv(env({ __CFBundleIdentifier: "com.google.antigravity" })), "antigravity");
+  // bundle id 缺失时用 askpass 路径兜底识别 VS Code 系分支
+  assert.equal(originFromEnv(env({ VSCODE_GIT_ASKPASS_MAIN: "/Applications/Cursor.app/x/askpass-main.js", TERM_PROGRAM: "vscode" })), "cursor");
+  assert.equal(originFromEnv(env({ TERM_PROGRAM: "vscode" })), "vscode/electron");
+  assert.equal(originFromEnv(env({ TERM_PROGRAM: "iTerm.app" })), "terminal");
+  assert.equal(originFromEnv(env({ SSH_CONNECTION: "1.2.3.4 50022 5.6.7.8 22" })), "ssh");
+  assert.equal(originFromEnv(env({ PATH: "/usr/bin" })), null);
+});
+
+test("parseMacEnvOrigins 从 ps eww 合并输出按 pid 提取来源", () => {
+  const m = parseMacEnvOrigins(PS_EWW_ENV);
+  assert.equal(m.get(2755), "claude-code");
+  assert.equal(m.get(60534), "cursor");
+  assert.equal(m.has(70001), false); // 无标记的不产生条目
+});
+
+test("parseEnvironOrigin 解析 NUL 分隔的 /proc environ", () => {
+  assert.equal(parseEnvironOrigin("PATH=/usr/bin\0CLAUDECODE=1\0TERM=xterm"), "claude-code");
+  assert.equal(parseEnvironOrigin("PATH=/usr/bin\0HOME=/root"), null);
+});
+
+test("scanListeners 为 detached 进程补充 env 溯源 origin", async () => {
+  const fakeExecWithEnv: Exec = async (cmd, args) => {
+    if (cmd === "ps" && args.includes("eww")) {
+      // env 查询只针对 detached 的 pid，且一次批量
+      assert.equal(args[args.indexOf("-p") + 1], "2755");
+      return PS_EWW_ENV;
+    }
+    return fakeExec(cmd, args);
+  };
+  const infos = await scanListeners(fakeExecWithEnv, "darwin");
+  const byPid = new Map(infos.map((p) => [p.pid, p]));
+  assert.equal(byPid.get(2755)!.origin, "claude-code");
+  assert.equal(byPid.get(8660)!.origin, undefined); // 非 detached 不查也不标
+});
+
+test("displaySource 渲染 detached 的溯源标签", () => {
+  const base = {
+    pid: 1, ports: [1], procName: "node", command: "",
+    cwd: null, inferredProject: null, source: "detached",
+  };
+  assert.equal(displaySource({ ...base, origin: "claude-code" }), "detached (claude-code)");
+  assert.equal(displaySource(base), "detached");
 });

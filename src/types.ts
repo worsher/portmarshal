@@ -40,6 +40,8 @@ export interface ProcessInfo {
   /** PM2 jlist 反查到的应用元数据（不保留 env，避免泄露 secret） */
   pm2?: Pm2Info;
   source: string; // "claude-code" | "cursor" | "antigravity" | "vscode/electron" | "terminal" | "docker" | "pm2" | "detached" | "?"
+  /** detached 进程从环境变量残留追溯的启动者。仅展示用途，不参与 gc/stop 的状态判定 */
+  origin?: string;
 }
 
 export interface RegistryEntry {

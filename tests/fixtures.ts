@@ -135,3 +135,10 @@ export const PM2_JLIST = JSON.stringify([
     },
   },
 ]);
+
+/** ps eww -o pid=,command= 样本：命令行与环境变量以空格拼接（macOS 无法精确切分，只做白名单 key 搜索）
+ * 2755 带 Claude Code agent 标记；60534 带 Cursor bundle id + vscode 终端标记；70001 无任何来源标记 */
+export const PS_EWW_ENV = ` 2755 python3 -m http.server 8901 TERM=xterm-256color CLAUDECODE=1 CLAUDE_CODE_ENTRYPOINT=cli PATH=/usr/bin
+60534 /Users/worsher/.n/bin/node tests/registry.test.ts __CFBundleIdentifier=com.todesktop.230313mzl4w4u92 TERM_PROGRAM=vscode VSCODE_GIT_ASKPASS_MAIN=/Applications/Cursor.app/Contents/Resources/app/extensions/git/dist/askpass-main.js
+70001 ruby server.rb --port=3000 PATH=/usr/bin HOME=/Users/worsher
+`;

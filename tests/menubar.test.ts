@@ -52,3 +52,10 @@ test("renderMenubar 路径含双引号时 param 段不残留引号", () => {
   const meta = finder.split("|").slice(1).join("|");
   assert.equal(/param1="[^"]*"\s+terminal=false/.test(meta), true);
 });
+
+test("renderMenubar detached 行带 env 溯源标签", () => {
+  const e = entry(8901, "unregistered", "detached");
+  e.proc!.origin = "claude-code";
+  const out = renderMenubar([e], "/bin/portmarshal");
+  assert.match(out, /8901 .* · detached \(claude-code\)/);
+});

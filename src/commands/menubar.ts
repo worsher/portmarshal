@@ -28,7 +28,8 @@ export function renderMenubar(entries: MergedEntry[], binPath: string): string {
     const isDetached = e.proc?.source === "detached";
     const mark = e.state === "drift" ? "⚠ " : isDetached ? "⚠ " : "";
     const suffix = isDetached || e.state === "drift" ? " | color=orange" : "";
-    const label = isDetached ? "detached" : src;
+    const label = src; // displaySource 已渲染 detached 及其 env 溯源标签
+
     lines.push(`${mark}${e.port} ${projName} · ${label}${suffix}`);
     const stopLabel = e.proc && !isDetached && e.state !== "drift" ? `Stop service… (${src} is active)` : "Stop service";
     if (e.proc) {

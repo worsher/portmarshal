@@ -20,7 +20,7 @@ export default async function gc(flags: Flags): Promise<number> {
     return EXIT.OK;
   }
   for (const p of detached) {
-    const desc = `${p.ports.join(",")} · pid ${p.pid} · ${resolveProjectDir(p) ?? "?"} · ${p.command.slice(0, 60)}`;
+    const desc = `${p.ports.join(",")} · pid ${p.pid}${p.origin ? ` · from ${p.origin}` : ""} · ${resolveProjectDir(p) ?? "?"} · ${p.command.slice(0, 60)}`;
     if (flags.killDetached) {
       try {
         const how = await terminate(p.pid);
