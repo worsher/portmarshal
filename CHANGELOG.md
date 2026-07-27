@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0 — 2026-07-27
+
+- Trace detached listeners back to their launcher through environment-variable remnants (`CLAUDECODE`, IDE bundle identifiers, `TERM_PROGRAM`, `SSH_CONNECTION`), shown as `detached (claude-code)` in `list`, `whois`, the menubar, and `gc` candidate descriptions
+- Agent markers win over IDE markers, which win over terminal markers, so a server started by Claude Code inside Cursor's terminal is attributed to the agent
+- Query environments only for detached pids in one batched call (macOS `ps eww`, Linux `/proc/<pid>/environ`), read only an allowlist of marker keys, and never retain the full environment; the origin label is informational and does not change `gc`/`stop` semantics
+
 ## 0.4.0 — 2026-07-25
 
 - Add `portmarshal run <name> -- <command...>`: claim a port, inject `PORT` and `{port}` placeholders, supervise the command in the foreground, forward signals to the whole process group, and auto-release the claim on exit
