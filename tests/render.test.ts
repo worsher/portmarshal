@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatTable, C } from "../src/render.js";
+import { isDeadRun } from "../src/commands/list.js";
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -50,4 +51,14 @@ test("formatTable 宽度计算忽略 ANSI 码，假名/全角字符按 2 列", (
   assert.equal(lines[0], "プロセス  状态");
   assert.equal(lines[1], "node      ＯＫ");
   assert.equal(lines[2], "a         x   ");
+});
+
+test("isDeadRun: reserved + runPid 已死 → true；其余 false", () => {
+  const dead = { port: 3000, state: "reserved", reg: { name: "web", project: "/p", port: 3000, claimedAt: "", runPid: 999999 } };
+  const alive = { port: 3000, state: "reserved", reg: { name: "web", project: "/p", port: 3000, claimedAt: "", runPid: process.pid } };
+  const plain = { port: 3000, state: "reserved", reg: { name: "web", project: "/p", port: 3000, claimedAt: "" } };
+  assert.equal(isDeadRun(dead as never), true);
+  assert.equal(isDeadRun(alive as never), false);
+  assert.equal(isDeadRun(plain as never), false);
+  assert.equal(isDeadRun({ ...dead, state: "active" } as never), false);
 });

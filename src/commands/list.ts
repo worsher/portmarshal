@@ -5,6 +5,7 @@ import { scanListeners, isNoise, resolveProjectDir, displaySource } from "../sca
 import { mergeScanRegistry } from "../merge.js";
 import { Registry } from "../registry.js";
 import { formatTable, C } from "../render.js";
+import { pidAlive } from "../ready.js";
 
 const STATE_LABEL: Record<string, string> = {
   active: `${C.green}●${C.reset} active`,
@@ -12,6 +13,11 @@ const STATE_LABEL: Record<string, string> = {
   unregistered: "○ unregistered",
   drift: `${C.yellow}⚠ drift${C.reset}`,
 };
+
+/** run -d 托管的 claim：进程已死但记录还在（无监听）→ 提示 dead */
+export function isDeadRun(e: MergedEntry, alive: (pid: number) => boolean = pidAlive): boolean {
+  return e.state === "reserved" && e.reg?.runPid !== undefined && !alive(e.reg.runPid);
+}
 
 export default async function list(flags: Flags): Promise<number> {
   const [scan, registry] = await Promise.all([
@@ -40,7 +46,7 @@ export default async function list(flags: Flags): Promise<number> {
       : "-",
     e.reg?.name ?? "-",
     (e.proc ? resolveProjectDir(e.proc) : e.reg?.project) ?? "?",
-    e.state === "drift" ? `↔ ${e.driftPeer}` : "",
+    e.state === "drift" ? `↔ ${e.driftPeer}` : isDeadRun(e) ? `${C.red}dead${C.reset}` : "",
   ]);
   process.stdout.write(
     formatTable(["PORT", "STATE", "PID", "SOURCE", "CLAIM", "PROJECT", ""], rows) + "\n",
