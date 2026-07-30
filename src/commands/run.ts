@@ -1,13 +1,16 @@
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs/promises";
 import { spawn } from "node:child_process";
 import type { Flags } from "../cli.js";
 import { EXIT } from "../types.js";
 import { Registry, LockTimeoutError, defaultClaimedBy } from "../registry.js";
 import { projectOwnsPort, scanListeners, resolveProjectDir, displaySource } from "../scan.js";
+import { logFilePath, rotateLog, tailLines } from "../runlog.js";
+import { waitReady, pidAlive } from "../ready.js";
 import stop from "./stop.js";
 
-const USAGE = "Usage: portmarshal run <name> [--prefer N] [--range A-B] [--project DIR] [--restart] -- <command...>\n";
+const USAGE = "Usage: portmarshal run <name> [-d] [--wait-timeout N] [--ready-url PATH] [--prefer N] [--range A-B] [--project DIR] [--restart] -- <command...>\n";
 const FORWARDED = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 export function substitutePort(args: string[], port: number): string[] {
@@ -63,6 +66,7 @@ export default async function run(flags: Flags): Promise<number> {
   }
 
   const argv = substitutePort(flags.rest, port);
+  if (flags.detach) return runDetached(name, project, port, argv, registry, flags);
   process.stderr.write(`portmarshal: serving ${name}@${project} on port ${port}\n`);
   const child = spawn(argv[0], argv.slice(1), {
     // stdin 用 ignore 而非 inherit：detached 组内子进程若读控制终端会收到 SIGTTIN 而挂起
@@ -94,4 +98,61 @@ export default async function run(flags: Flags): Promise<number> {
       finish(signal ? 128 + (os.constants.signals[signal] ?? 15) : (code ?? EXIT.ERR));
     });
   });
+}
+
+/** SIGTERM → 宽限 2s → SIGKILL，作用于整个进程组；组已消失时静默 */
+async function terminateGroup(pgid: number): Promise<void> {
+  try { process.kill(-pgid, "SIGTERM"); } catch { return; }
+  for (let i = 0; i < 20; i++) {
+    if (!pidAlive(pgid)) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  try { process.kill(-pgid, "SIGKILL"); } catch { /* 组已不存在 */ }
+}
+
+async function runDetached(
+  name: string, project: string, port: number, argv: string[],
+  registry: Registry, flags: Flags,
+): Promise<number> {
+  const logFile = logFilePath(project, name);
+  await rotateLog(logFile);
+  const fd = await fs.open(logFile, "a");
+
+  const child = spawn(argv[0], argv.slice(1), {
+    stdio: ["ignore", fd.fd, fd.fd],
+    detached: true, // 自成进程组：失败清理时信号覆盖整组
+    env: { ...process.env, PORT: String(port), PORTMARSHAL_SERVICE: name },
+  });
+  const spawnErr = await new Promise<Error | null>((resolve) => {
+    child.once("spawn", () => resolve(null));
+    child.once("error", (e) => resolve(e));
+  });
+  await fd.close(); // 子进程持有 fd 副本，父进程侧即可关闭
+  if (spawnErr || child.pid === undefined) {
+    process.stderr.write(`portmarshal: failed to start ${argv[0]}: ${spawnErr?.message ?? "no pid"}\n`);
+    await registry.release(name, project).catch(() => {});
+    return EXIT.ERR;
+  }
+  child.unref();
+  await registry.setRunInfo(name, project, { runPid: child.pid, logFile });
+
+  const ready = await waitReady({
+    port, pid: child.pid, readyUrl: flags.readyUrl,
+    timeoutMs: (flags.waitTimeout ?? 30) * 1000,
+  });
+  if (!ready.ok) {
+    const why = ready.reason === "died" ? "process exited before becoming ready" : "readiness wait timed out";
+    const tail = await tailLines(logFile, 20).catch(() => []);
+    process.stderr.write(
+      `portmarshal: ${name}@${project} failed to become ready on port ${port}: ${why}\n` +
+      (tail.length ? `--- last ${tail.length} log lines (${logFile}) ---\n${tail.join("\n")}\n` : ""),
+    );
+    await terminateGroup(child.pid);
+    await registry.release(name, project).catch(() => {});
+    return EXIT.ERR;
+  }
+  process.stderr.write(
+    `portmarshal: ready ${name}@${project} on port ${port} (pid ${child.pid}, logs: ${logFile})\n`,
+  );
+  return EXIT.OK;
 }

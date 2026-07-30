@@ -153,3 +153,78 @@ test("run --restart: 护栏停掉本项目旧实例后在同端口重启", async
     assert.equal(entry.lastPort, port);
   });
 });
+
+test("run -d: 就绪后返回 0，registry 记录 runPid/logFile，服务继续存活", async (t) => {
+  await withStateDir(async (stateDir) => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-proj-"));
+    t.after(() => fs.rm(project, { recursive: true, force: true }));
+    const code = await run(flagsOf({
+      positional: ["web"], project, prefer: 18830, detach: true,
+      rest: [process.execPath, "-e",
+        'require("http").createServer((q,r)=>r.end("ok")).listen(process.env.PORT,"127.0.0.1",()=>console.log("server up"))'],
+    }));
+    assert.equal(code, 0);
+    const entry = (await loadEntries(stateDir))[0];
+    assert.ok(entry.runPid && entry.runPid > 0);
+    assert.ok(entry.logFile);
+    assert.equal(entry.released, undefined);
+    t.after(() => { try { process.kill(-entry.runPid!, "SIGKILL"); } catch { /* 已退出 */ } });
+    // 服务在 run 返回后仍然在监听
+    await waitListening(entry.port);
+    // 日志已落盘
+    const log = await fs.readFile(entry.logFile!, "utf8");
+    assert.match(log, /server up/);
+  });
+});
+
+test("run -d: 命令永不监听 → 超时失败，退出 1，进程被杀，claim 已 release", async () => {
+  await withStateDir(async (stateDir) => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-proj-"));
+    const code = await run(flagsOf({
+      positional: ["web"], project, prefer: 18831, detach: true, waitTimeout: 1,
+      rest: [process.execPath, "-e", "setInterval(()=>{}, 1000)"],
+    }));
+    assert.equal(code, 1);
+    const entry = (await loadEntries(stateDir))[0];
+    assert.equal(entry.released, true);
+    assert.equal(entry.runPid, undefined);
+    await fs.rm(project, { recursive: true, force: true });
+  });
+});
+
+test("run -d: 命令立即退出 → 快速失败（不等满超时）", async () => {
+  await withStateDir(async (stateDir) => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-proj-"));
+    const start = Date.now();
+    const code = await run(flagsOf({
+      positional: ["web"], project, prefer: 18832, detach: true, waitTimeout: 30,
+      rest: [process.execPath, "-e", "process.exit(0)"],
+    }));
+    assert.equal(code, 1);
+    assert.ok(Date.now() - start < 10_000);
+    assert.equal((await loadEntries(stateDir))[0].released, true);
+    await fs.rm(project, { recursive: true, force: true });
+  });
+});
+
+test("run -d: 日志轮转保留上一次运行", async (t) => {
+  await withStateDir(async (stateDir) => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-proj-"));
+    t.after(() => fs.rm(project, { recursive: true, force: true }));
+    const serve = 'require("http").createServer((q,r)=>r.end("ok")).listen(process.env.PORT,"127.0.0.1",()=>console.log("server up"))';
+    const args = {
+      positional: ["web"], project, prefer: 18833, detach: true,
+      rest: [process.execPath, "-e", serve],
+    } as const;
+    assert.equal(await run(flagsOf({ ...args })), 0);
+    let entry = (await loadEntries(stateDir))[0];
+    const firstPid = entry.runPid!;
+    assert.equal(await run(flagsOf({ ...args, restart: true })), 0);
+    entry = (await loadEntries(stateDir)).find((e) => e.name === "web")!;
+    t.after(() => { try { process.kill(-entry.runPid!, "SIGKILL"); } catch { /* 已退出 */ } });
+    assert.notEqual(entry.runPid, firstPid);
+    // 上一次的日志转到了 .old
+    const old = await fs.readFile(entry.logFile! + ".old", "utf8");
+    assert.match(old, /server up/);
+  });
+});
