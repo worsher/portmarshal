@@ -5,6 +5,19 @@ export function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+/**
+ * SIGTERM → 宽限 ≤2s 轮询 → SIGKILL，作用于整个进程组（负 pgid）；组已不存在时静默。
+ * run.ts 的就绪失败清理、stop.ts 的托管目标停止共用同一份实现，避免行为分叉。
+ */
+export async function terminateGroup(pgid: number): Promise<void> {
+  try { process.kill(-pgid, "SIGTERM"); } catch { return; }
+  for (let i = 0; i < 20; i++) {
+    if (!pidAlive(pgid)) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  try { process.kill(-pgid, "SIGKILL"); } catch { /* 组已不存在 */ }
+}
+
 function tcpOnce(port: number, host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const sock = net.connect({ port, host }, () => { sock.destroy(); resolve(true); });

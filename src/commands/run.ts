@@ -7,7 +7,7 @@ import { EXIT } from "../types.js";
 import { Registry, LockTimeoutError, defaultClaimedBy } from "../registry.js";
 import { projectOwnsPort, scanListeners, resolveProjectDir, displaySource } from "../scan.js";
 import { logFilePath, rotateLog, tailLines } from "../runlog.js";
-import { waitReady, pidAlive } from "../ready.js";
+import { waitReady, terminateGroup } from "../ready.js";
 import stop from "./stop.js";
 
 const USAGE = "Usage: portmarshal run <name> [-d] [--wait-timeout N] [--ready-url PATH] [--prefer N] [--range A-B] [--project DIR] [--restart] -- <command...>\n";
@@ -98,16 +98,6 @@ export default async function run(flags: Flags): Promise<number> {
       finish(signal ? 128 + (os.constants.signals[signal] ?? 15) : (code ?? EXIT.ERR));
     });
   });
-}
-
-/** SIGTERM → 宽限 2s → SIGKILL，作用于整个进程组；组已消失时静默 */
-async function terminateGroup(pgid: number): Promise<void> {
-  try { process.kill(-pgid, "SIGTERM"); } catch { return; }
-  for (let i = 0; i < 20; i++) {
-    if (!pidAlive(pgid)) return;
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  try { process.kill(-pgid, "SIGKILL"); } catch { /* 组已不存在 */ }
 }
 
 async function runDetached(

@@ -3,6 +3,24 @@ import { EXIT } from "../types.js";
 import { scanListeners, isNoise, terminate, resolveProjectDir } from "../scan.js";
 import { Registry } from "../registry.js";
 import { C } from "../render.js";
+import type { ProcessInfo, RegistryEntry } from "../types.js";
+
+/**
+ * gc 候选过滤：run -d 托管的服务带 PORTMARSHAL_SERVICE 标记，本应豁免清理——但豁免必须有
+ * 活跃（非 released）registry 记录背书（runPid 命中该进程，或该进程占的端口正是记录声明的端口）。
+ * 没有背书的场景：stop 只 kill 了监听 pid，组长（runPid）被落下，claim 已转 released、runPid 已清空，
+ * 组长却还带着 PORTMARSHAL_SERVICE 环境残留——这是伪装成受管服务的无主进程，必须照常进候选，
+ * 不能凭 env 标记就无条件放行。抽成纯函数便于单测覆盖，不依赖真实 scan/registry I/O。
+ */
+export function gcCandidates(scan: ProcessInfo[], activeEntries: RegistryEntry[]): ProcessInfo[] {
+  const activeRunEntries = activeEntries.filter((e) => !e.released && e.runPid !== undefined);
+  return scan.filter((p) => {
+    if (p.source !== "detached" || isNoise(p.procName)) return false;
+    if (!p.origin?.startsWith("run:")) return true;
+    const endorsed = activeRunEntries.some((e) => e.runPid === p.pid || p.ports.includes(e.port));
+    return !endorsed;
+  });
+}
 
 export default async function gc(flags: Flags): Promise<number> {
   const registry = new Registry();
@@ -14,10 +32,10 @@ export default async function gc(flags: Flags): Promise<number> {
     process.stderr.write(`Reaped stale claim ${e.name}@${e.project} → ${e.port}\n`);
   }
 
-  // run -d 托管的服务带 PORTMARSHAL_SERVICE 标记，是被管理的，不是清理对象
-  const detached = scan.filter(
-    (p) => p.source === "detached" && !isNoise(p.procName) && !p.origin?.startsWith("run:"),
-  );
+  // gcStale 之后重新读一次 registry：豁免背书只能认「活跃」记录，
+  // 否则刚被回收的记录仍会被当成背书，等于没做校验。
+  const entries = await registry.load();
+  const detached = gcCandidates(scan, entries);
   if (detached.length === 0) {
     process.stderr.write("No detached services found\n");
     return EXIT.OK;

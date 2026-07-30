@@ -4,6 +4,7 @@ import type { Flags } from "../cli.js";
 import { EXIT } from "../types.js";
 import { scanListeners, classifyTarget, terminate, resolveProjectDir, displaySource } from "../scan.js";
 import { Registry } from "../registry.js";
+import { pidAlive, terminateGroup } from "../ready.js";
 
 function osascript(script: string): Promise<{ ok: boolean }> {
   return new Promise((resolve) => {
@@ -107,6 +108,15 @@ export default async function stop(flags: Flags): Promise<number> {
       }
       return EXIT.BLOCKED;
     }
+  }
+
+  // run -d 托管目标：registry 记的 runPid 是进程组组长，真正监听端口的可能是它 spawn 出来的孙进程
+  // （比如 wrapper 脚本自己再 spawn 一个 nodemon）。只 kill 监听 pid 会把组长晾在原地——
+  // 此时 claim 即将转 released、runPid 会被清空，组长却还带着 PORTMARSHAL_SERVICE 环境变量残留，
+  // 会被 gc 的 run:* 豁免误认成受管服务，永远进不了清理候选。这里先对整组发信号兜底。
+  const runEntry = entries.find((e) => !e.released && e.port === port && e.runPid !== undefined);
+  if (runEntry?.runPid !== undefined && pidAlive(runEntry.runPid)) {
+    await terminateGroup(runEntry.runPid);
   }
 
   let how: "term" | "kill" | "gone" | "docker-stop" | "pm2-stop";

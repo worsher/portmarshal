@@ -1,7 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyTarget, terminate } from "../src/scan.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import net from "node:net";
+import { spawn } from "node:child_process";
+import { classifyTarget, terminate, scanListeners } from "../src/scan.js";
 import type { ProcessInfo, RegistryEntry } from "../src/types.js";
+import type { Flags } from "../src/flags.js";
+import stop from "../src/commands/stop.js";
+import { Registry } from "../src/registry.js";
+import { pidAlive } from "../src/ready.js";
 
 function proc(over: Partial<ProcessInfo>): ProcessInfo {
   return {
@@ -72,4 +81,94 @@ test("terminate: EPERM 向上抛出，不谎报成功", async () => {
     terminate(42, 200, () => { const e: NodeJS.ErrnoException = new Error("op not permitted"); e.code = "EPERM"; throw e; }, () => true),
     /EPERM|op not permitted/,
   );
+});
+
+function stopFlagsOf(over: Partial<Flags>): Flags {
+  return {
+    json: false, all: false, force: false, gui: false, install: false,
+    killDetached: false, restart: false, detach: false, follow: false,
+    positional: [], rest: [], ...over,
+  };
+}
+
+async function withStateDir<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-stop-"));
+  process.env.PORTMARSHAL_STATE_DIR = stateDir;
+  try { return await fn(stateDir); } finally {
+    delete process.env.PORTMARSHAL_STATE_DIR;
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
+
+function waitListening(port: number, timeoutMs = 5000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const tryOnce = () => {
+      const sock = net.connect({ port, host: "127.0.0.1" }, () => { sock.destroy(); resolve(); });
+      sock.on("error", () => {
+        sock.destroy();
+        if (Date.now() - start > timeoutMs) reject(new Error("timeout waiting for port"));
+        else setTimeout(tryOnce, 150);
+      });
+    };
+    tryOnce();
+  });
+}
+
+async function waitUntil(pred: () => boolean, timeoutMs: number): Promise<void> {
+  const start = Date.now();
+  while (!pred() && Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+test("stop: wrapper 组长本身不监听、孙进程才监听 → stop 对整组发信号，组长与监听孙进程都死，claim 转 released", async (t) => {
+  await withStateDir(async (stateDir) => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-proj-"));
+    t.after(() => fs.rm(project, { recursive: true, force: true }));
+
+    const registry = new Registry();
+    const { port } = await registry.claim({ name: "web", project, prefer: 18845, claimedBy: "test" });
+
+    // 组长脚本：自己不监听，只 spawn 一个真正监听端口的孙进程（模拟 nodemon 之类的 wrapper）；
+    // 孙进程不传 detached，默认沿用组长刚 setsid() 出来的新进程组，所以对 -leaderPid 发信号能覆盖到它。
+    const serveCode = `require("http").createServer((q,r)=>r.end("ok")).listen(${port},"127.0.0.1",()=>console.log("child up"))`;
+    const leaderScript = `
+      const { spawn } = require("child_process");
+      spawn(${JSON.stringify(process.execPath)}, ["-e", ${JSON.stringify(serveCode)}], { stdio: "ignore" });
+      setInterval(() => {}, 1000);
+    `;
+    const leader = spawn(process.execPath, ["-e", leaderScript], {
+      cwd: project, detached: true, stdio: "ignore",
+    });
+    leader.unref();
+    const leaderPid = leader.pid!;
+    t.after(() => { try { process.kill(-leaderPid, "SIGKILL"); } catch { /* 已退出 */ } });
+
+    await waitListening(port);
+    const scanned = (await scanListeners()).find((p) => p.ports.includes(port));
+    assert.ok(scanned, "孙进程应已在扫描结果里监听端口");
+    const listenerPid = scanned!.pid;
+    // 确认场景成立：真正监听的是孙进程而不是组长自己
+    assert.notEqual(listenerPid, leaderPid);
+    assert.equal(pidAlive(leaderPid), true);
+    assert.equal(pidAlive(listenerPid), true);
+
+    await registry.setRunInfo("web", project, { runPid: leaderPid, logFile: path.join(project, "web.log") });
+
+    const code = await stop(stopFlagsOf({ positional: [String(port)], project }));
+    assert.equal(code, 0);
+
+    // SIGTERM 到进程真正退出之间有异步窗口，轮询容错
+    await waitUntil(() => !pidAlive(leaderPid) && !pidAlive(listenerPid), 3000);
+    assert.equal(pidAlive(leaderPid), false, "组长应已被组信号杀死");
+    assert.equal(pidAlive(listenerPid), false, "监听孙进程应已被组信号杀死");
+
+    const entries: RegistryEntry[] = JSON.parse(
+      await fs.readFile(path.join(stateDir, "registry.json"), "utf8"),
+    );
+    const entry = entries.find((e) => e.name === "web" && e.project === project);
+    assert.ok(entry);
+    assert.equal(entry!.released, true);
+  });
 });
