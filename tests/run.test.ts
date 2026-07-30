@@ -9,6 +9,7 @@ import type { Flags } from "../src/flags.js";
 import run, { substitutePort } from "../src/commands/run.js";
 import type { RegistryEntry } from "../src/types.js";
 import { Registry } from "../src/registry.js";
+import { pidAlive } from "../src/ready.js";
 
 function flagsOf(over: Partial<Flags>): Flags {
   return {
@@ -102,6 +103,14 @@ function waitListening(port: number, timeoutMs = 5000): Promise<void> {
     };
     tryOnce();
   });
+}
+
+/** 轮询直到 pred() 为真或超时；用于容忍 SIGTERM 到进程真正退出之间的异步窗口 */
+async function waitUntil(pred: () => boolean, timeoutMs: number): Promise<void> {
+  const start = Date.now();
+  while (!pred() && Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
 }
 
 test("run: 端口被本项目旧实例监听且无 --restart 时退出 3", async () => {
@@ -223,6 +232,10 @@ test("run -d: 日志轮转保留上一次运行", async (t) => {
     entry = (await loadEntries(stateDir)).find((e) => e.name === "web")!;
     t.after(() => { try { process.kill(-entry.runPid!, "SIGKILL"); } catch { /* 已退出 */ } });
     assert.notEqual(entry.runPid, firstPid);
+    // restart 的 stop 护栏应已终止旧进程组；SIGTERM 到实际退出有极短异步窗口，轮询容错
+    await waitUntil(() => !pidAlive(firstPid), 2000);
+    assert.equal(pidAlive(firstPid), false);
+    assert.equal(entry.port, 18833); // cwd 钉住 project 后，claim 复用校验应识别出旧实例，端口原地粘回
     // 上一次的日志转到了 .old
     const old = await fs.readFile(entry.logFile! + ".old", "utf8");
     assert.match(old, /server up/);

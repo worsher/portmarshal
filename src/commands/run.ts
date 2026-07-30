@@ -121,6 +121,9 @@ async function runDetached(
   const child = spawn(argv[0], argv.slice(1), {
     stdio: ["ignore", fd.fd, fd.fd],
     detached: true, // 自成进程组：失败清理时信号覆盖整组
+    // cwd 必须钉在 project：detached 子进程没有终端 cwd 可继承参照，
+    // 且 scan 的项目归属（restart 护栏、claim 复用校验）都按 cwd 匹配 project，不钉住会让旧实例识别不到自己。
+    cwd: project,
     env: { ...process.env, PORT: String(port), PORTMARSHAL_SERVICE: name },
   });
   const spawnErr = await new Promise<Error | null>((resolve) => {
