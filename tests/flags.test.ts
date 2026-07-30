@@ -23,3 +23,31 @@ test("parseFlags: --restart 开关", () => {
 test("parseFlags: 无 -- 时 rest 为空数组", () => {
   assert.deepEqual(parseFlags(["web"]).rest, []);
 });
+
+test("parseFlags: -d/--detach 与 -f/--follow", () => {
+  assert.equal(parseFlags(["-d"]).detach, true);
+  assert.equal(parseFlags(["--detach"]).detach, true);
+  assert.equal(parseFlags(["-f"]).follow, true);
+  assert.equal(parseFlags(["--follow"]).follow, true);
+  assert.equal(parseFlags([]).detach, false);
+  assert.equal(parseFlags([]).follow, false);
+});
+
+test("parseFlags: --wait-timeout 正整数校验", () => {
+  assert.equal(parseFlags(["--wait-timeout", "45"]).waitTimeout, 45);
+  assert.throws(() => parseFlags(["--wait-timeout", "0"]));
+  assert.throws(() => parseFlags(["--wait-timeout", "abc"]));
+  assert.throws(() => parseFlags(["--wait-timeout", "1.5"]));
+});
+
+test("parseFlags: --ready-url 必须以 / 开头", () => {
+  assert.equal(parseFlags(["--ready-url", "/health"]).readyUrl, "/health");
+  assert.throws(() => parseFlags(["--ready-url", "health"]));
+  assert.throws(() => parseFlags(["--ready-url"]));
+});
+
+test("parseFlags: -n 正整数校验", () => {
+  assert.equal(parseFlags(["-n", "100"]).lines, 100);
+  assert.throws(() => parseFlags(["-n", "0"]));
+  assert.throws(() => parseFlags(["-n", "xx"]));
+});

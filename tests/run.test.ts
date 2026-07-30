@@ -13,7 +13,8 @@ import { Registry } from "../src/registry.js";
 function flagsOf(over: Partial<Flags>): Flags {
   return {
     json: false, all: false, force: false, gui: false, install: false,
-    killDetached: false, restart: false, positional: [], rest: [], ...over,
+    killDetached: false, restart: false, detach: false, follow: false,
+    positional: [], rest: [], ...over,
   };
 }
 
