@@ -12,7 +12,8 @@ Usage:
   portmarshal list [--json] [--all] [--project <dir|.>]
   portmarshal whois <port> [--json]
   portmarshal claim <name> [--prefer N] [--range A-B] [--json]
-  portmarshal run <name> [--prefer N] [--range A-B] [--project DIR] [--restart] -- <command...>
+  portmarshal run <name> [-d] [--wait-timeout N] [--ready-url PATH] [--prefer N] [--range A-B] [--project DIR] [--restart] -- <command...>
+  portmarshal logs <name|port> [--project DIR] [-f] [-n N] [--json]
   portmarshal release <name>
   portmarshal stop <port|name> [--force|--gui] [--json]
   portmarshal gc [--kill-detached]
@@ -30,6 +31,7 @@ const COMMANDS: Record<string, () => Promise<{ default: CommandFn }>> = {
   release: () => import("./commands/release.js"),
   stop: () => import("./commands/stop.js"),
   gc: () => import("./commands/gc.js"),
+  logs: () => import("./commands/logs.js"),
   watch: () => import("./commands/watch.js"),
   menubar: () => import("./commands/menubar.js"),
 };
