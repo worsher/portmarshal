@@ -191,3 +191,40 @@ test("偷锁对无效 pid 文件走 mtime 宽限：内容为空且锁目录足�
   const { port } = await r.claim({ name: "web", project: "/p", prefer: 3000, portFree: async () => true });
   assert.equal(port, 3000);
 });
+
+test("setRunInfo 附加 runPid/logFile；release 清除 runPid 保留 logFile", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pm-reg-run-"));
+  const reg = new Registry(dir);
+  await reg.claim({ name: "web", project: "/tmp/p", claimedBy: "test" });
+  await reg.setRunInfo("web", "/tmp/p", { runPid: 12345, logFile: "/tmp/p.log" });
+  let e = (await reg.load())[0];
+  assert.equal(e.runPid, 12345);
+  assert.equal(e.logFile, "/tmp/p.log");
+
+  await reg.release("web", "/tmp/p");
+  e = (await reg.load())[0];
+  assert.equal(e.released, true);
+  assert.equal(e.runPid, undefined);
+  assert.equal(e.logFile, "/tmp/p.log");
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
+test("setRunInfo 对不存在或已 released 的 entry 静默返回", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pm-reg-run2-"));
+  const reg = new Registry(dir);
+  await reg.setRunInfo("ghost", "/tmp/p", { runPid: 1, logFile: "/x" });
+  assert.equal((await reg.load()).length, 0);
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
+test("markReleasedByPort 同样清除 runPid", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pm-reg-run3-"));
+  const reg = new Registry(dir);
+  const { port } = await reg.claim({ name: "web", project: "/tmp/p", claimedBy: "test" });
+  await reg.setRunInfo("web", "/tmp/p", { runPid: 12345, logFile: "/tmp/p.log" });
+  await reg.markReleasedByPort(port);
+  const e = (await reg.load())[0];
+  assert.equal(e.runPid, undefined);
+  assert.equal(e.logFile, "/tmp/p.log");
+  await fs.rm(dir, { recursive: true, force: true });
+});

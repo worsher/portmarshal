@@ -52,6 +52,10 @@ export interface RegistryEntry {
   claimedBy?: string;
   released?: boolean;
   lastPort?: number;
+  /** run -d 托管的进程组长 pid；转 released 时清除 */
+  runPid?: number;
+  /** run -d 日志文件绝对路径；release 后保留，供 logs 查上一次输出 */
+  logFile?: string;
 }
 
 export type PortState = "active" | "reserved" | "unregistered" | "drift";

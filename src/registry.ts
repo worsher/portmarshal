@@ -186,13 +186,23 @@ export class Registry {
     });
   }
 
+  async setRunInfo(name: string, project: string, info: { runPid: number; logFile: string }): Promise<void> {
+    await this.withLock(async () => {
+      const entries = await this.load();
+      const idx = entries.findIndex((e) => e.project === project && e.name === name && !e.released);
+      if (idx < 0) return;
+      entries[idx] = { ...entries[idx], runPid: info.runPid, logFile: info.logFile };
+      await this.save(entries);
+    });
+  }
+
   async release(name: string, project: string): Promise<RegistryEntry | null> {
     return this.withLock(async () => {
       const entries = await this.load();
       const idx = entries.findIndex((e) => e.project === project && e.name === name && !e.released);
       if (idx < 0) return null;
       const e = entries[idx];
-      entries[idx] = { ...e, released: true, lastPort: e.port };
+      entries[idx] = { ...e, released: true, lastPort: e.port, runPid: undefined };
       await this.save(entries);
       return e;
     });
@@ -205,7 +215,7 @@ export class Registry {
       for (let i = 0; i < entries.length; i++) {
         const e = entries[i];
         if (!e.released && e.port === port) {
-          entries[i] = { ...e, released: true, lastPort: e.port };
+          entries[i] = { ...e, released: true, lastPort: e.port, runPid: undefined };
           changed = true;
         }
       }
@@ -224,7 +234,7 @@ export class Registry {
         const age = now - Date.parse(e.claimedAt);
         if (!listening && age > 30 * 60 * 1000) {
           removed.push(e);
-          return { ...e, released: true, lastPort: e.port };
+          return { ...e, released: true, lastPort: e.port, runPid: undefined };
         }
         return e;
       });
