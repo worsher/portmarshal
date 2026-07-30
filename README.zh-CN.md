@@ -46,6 +46,8 @@ npm install -g portmarshal
 | `portmarshal whois <port> [--json]` | 查询端口的 PID、项目目录、完整命令和 Agent/服务来源 |
 | `portmarshal claim <name> [--prefer N] [--range A-B]` | 分配协作式粘性端口 claim；stdout 仅输出端口号 |
 | `portmarshal run <name> [--prefer N] [--restart] -- <command...>` | 预留端口并注入 `PORT` 和 `{port}`，前台监督子进程，退出自动释放 |
+| `portmarshal run -d <name> [--wait-timeout N] [--ready-url PATH] -- <command...>` | 同上，但转入后台：输出写入日志文件，服务就绪后立即返回 |
+| `portmarshal logs <name\|port> [-n N] [-f] [--json]` | 查看或跟随 `run -d` 启动服务的日志 |
 | `portmarshal release <name>` | 释放 claim，不停止进程 |
 | `portmarshal stop <port\|name> [--force\|--gui]` | 通过归属护栏停止服务 |
 | `portmarshal gc [--kill-detached]` | 回收过期 claim，查看或停止脱离会话的候选服务 |
@@ -61,6 +63,25 @@ portmarshal run web --prefer 5173 -- pnpm vite --port {port}
 ```
 
 `run` 预留粘性端口，注入为 `PORT` 环境变量（同时在命令中替换 `{port}` 占位符），在前台流式输出，转发信号到整个进程组，命令退出时自动释放 claim。若该端口仍被本项目旧实例监听，`run` 会拒绝启动并返回退出码 3；加 `--restart` 可先通过护栏 stop 停掉旧实例。需要自己管理进程生命周期时才用 `claim`。子进程的 stdin 不会被转发，交互式框架快捷键（如 Vite 的终端热键）不会响应——`run` 是为受监督的 dev server 设计的，不是交互式会话。
+
+### 用 `run -d` 转入后台
+
+```bash
+# 在后台启动 dev server；端口可连接后立即返回
+portmarshal run -d web --prefer 3000 -- pnpm dev
+
+# 用健康检查判定就绪，并自定义超时
+portmarshal run -d api --ready-url /health --wait-timeout 60 -- pnpm start
+
+# 跟随日志
+portmarshal logs web -f
+```
+
+`run -d` 会把子进程放进独立的进程组，将其 stdout/stderr 重定向到 `~/.portmarshal/logs/` 下的日志文件，服务就绪后立即把控制权交还调用方——不需要占用一个前台进程去盯着它。默认就绪判定是对预留端口做一次 TCP 连接，超时 30 秒；传入 `--ready-url /health` 可改为要求该路径返回 HTTP 2xx/3xx 响应，`--wait-timeout N` 可修改超时秒数。如果服务未能就绪（进程崩溃或等待超时），`run -d` 会打印日志最后 20 行，终止整个进程组，释放 claim，并以非零退出码结束——不会留下任何残留进程。成功时会打印一行 `ready`（含 pid 与日志路径）并以退出码 0 结束。
+
+日志文件位于 `~/.portmarshal/logs/<hash8>-<name>.log`，`hash8` 由项目目录哈希而来，避免不同项目下同名服务互相冲突。每次 `run -d` 启动前会把上一次的日志轮转为 `<file>.log.old`，因此当前和上一次的日志都可查看；释放 claim 不会删除日志文件。用 `portmarshal logs <name|port>` 查看日志尾部（默认 50 行，`-n` 可调整），`-f` 跟随输出，`--json` 输出机器可读格式。
+
+由 `run -d` 启动的服务在 `list`、`whois`、`gc` 中归属显示为 `run:<name>`，并且不会出现在 `gc` 的脱离候选列表里——它们已经被托管了。`stop` 依然走正常的归属护栏。`run -d` 不会自动重启崩溃的进程：如果被托管的进程自行退出，`portmarshal list` 会把对应记录标记为 `dead`，直到再次 `run -d` 或释放该 claim。
 
 ## 归属与停止护栏
 

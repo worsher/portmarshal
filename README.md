@@ -56,6 +56,8 @@ On first use, PortMarshal copies an existing `~/.portscout/registry.json` into `
 | `portmarshal whois <port> [--json]` | Inspect one port: PID, project directory, full command, agent or service source |
 | `portmarshal claim <name> [--prefer N] [--range A-B]` | Allocate a cooperative sticky port claim; stdout contains only the port number |
 | `portmarshal run <name> [--prefer N] [--restart] -- <command...>` | Claim a port, inject it as `PORT` and `{port}`, supervise the command in the foreground, auto-release on exit |
+| `portmarshal run -d <name> [--wait-timeout N] [--ready-url PATH] -- <command...>` | Same as above, but detached: captures output to a log file and returns once the service is ready |
+| `portmarshal logs <name\|port> [-n N] [-f] [--json]` | Show or follow the log of a service started with `run -d` |
 | `portmarshal release <name>` | Release a claim without stopping its process |
 | `portmarshal stop <port\|name> [--force\|--gui]` | Stop a service behind the ownership guard |
 | `portmarshal gc [--kill-detached]` | Reap stale claims and review or stop detached service candidates |
@@ -71,6 +73,25 @@ portmarshal run web --prefer 5173 -- pnpm vite --port {port}
 ```
 
 `run` claims a sticky port, injects it as the `PORT` environment variable (and replaces `{port}` placeholders in the command), streams output in the foreground, forwards signals to the whole process group, and releases the claim when the command exits. If the port is still served by a previous instance of the same project, `run` refuses with exit code 3; add `--restart` to stop it through the ownership guard first. `claim` remains available for scripts that manage the process themselves. Stdin is not forwarded to the child, so interactive framework shortcuts (e.g. Vite's terminal hotkeys) won't respond — `run` is built for supervised dev servers, not interactive sessions.
+
+### Backgrounding with `run -d`
+
+```bash
+# Start a dev server in the background; returns once the port accepts connections
+portmarshal run -d web --prefer 3000 -- pnpm dev
+
+# Health-gated readiness and a custom timeout
+portmarshal run -d api --ready-url /health --wait-timeout 60 -- pnpm start
+
+# Tail its logs
+portmarshal logs web -f
+```
+
+`run -d` detaches the child into its own process group, redirects its stdout/stderr into a log file under `~/.portmarshal/logs/`, and returns control to the caller once the service is ready — no need to babysit a foreground process. Readiness defaults to a plain TCP connect on the claimed port with a 30-second timeout; pass `--ready-url /health` to require an HTTP 2xx/3xx response from that path instead, and `--wait-timeout N` to change the timeout in seconds. If the service fails to become ready (crashes or times out), `run -d` prints the last 20 lines of its log, terminates the process group, releases the claim, and exits non-zero — nothing is left running. On success it prints a `ready` line with the pid and log path and exits 0.
+
+Log files live at `~/.portmarshal/logs/<hash8>-<name>.log`, keyed by a hash of the project directory so the same service name in different projects doesn't collide. Each `run -d` rotates the previous log to `<file>.log.old` before starting, so both the current and prior run stay inspectable; log files are not deleted when the claim is released. Use `portmarshal logs <name|port>` to print the tail (50 lines by default, `-n` to change it), `-f` to follow, or `--json` for machine-readable output.
+
+Services started with `run -d` are attributed as `run:<name>` in `list`, `whois`, and `gc`, and are exempt from `gc`'s detached-service candidates — they're already managed. `stop` still applies the normal ownership guard. `run -d` does not auto-restart a crashed process: if the managed process dies on its own, `portmarshal list` marks its entry `dead` until you `run -d` it again or release the claim.
 
 ## Attribution and safety
 

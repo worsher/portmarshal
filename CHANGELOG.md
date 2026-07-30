@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0 — 2026-07-30
+
+- Add `portmarshal run -d`: detached mode that captures stdout/stderr to `~/.portmarshal/logs/`, waits for TCP (or `--ready-url` HTTP) readiness before returning, and cleans up the claim and process group on failure
+- Add `portmarshal logs <name|port>` with `-n`, `-f` (follow), and `--json`
+- Attribute services started by `run -d` as `run:<name>` via the `PORTMARSHAL_SERVICE` env marker; they are exempt from `gc` candidates
+- `list` marks a managed run whose process has died as `dead`
+- Registry entries record `runPid`/`logFile`; log files survive release so the last run stays inspectable
+
 ## 0.5.0 — 2026-07-27
 
 - Trace detached listeners back to their launcher through environment-variable remnants (`CLAUDECODE`, IDE bundle identifiers, `TERM_PROGRAM`, `SSH_CONNECTION`), shown as `detached (claude-code)` in `list`, `whois`, the menubar, and `gc` candidate descriptions
