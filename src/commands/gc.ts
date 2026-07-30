@@ -14,7 +14,10 @@ export default async function gc(flags: Flags): Promise<number> {
     process.stderr.write(`Reaped stale claim ${e.name}@${e.project} → ${e.port}\n`);
   }
 
-  const detached = scan.filter((p) => p.source === "detached" && !isNoise(p.procName));
+  // run -d 托管的服务带 PORTMARSHAL_SERVICE 标记，是被管理的，不是清理对象
+  const detached = scan.filter(
+    (p) => p.source === "detached" && !isNoise(p.procName) && !p.origin?.startsWith("run:"),
+  );
   if (detached.length === 0) {
     process.stderr.write("No detached services found\n");
     return EXIT.OK;

@@ -319,6 +319,15 @@ test("originFromEnv 按 agent > IDE > 终端 优先级识别启动者", () => {
   assert.equal(originFromEnv(env({ PATH: "/usr/bin" })), null);
 });
 
+test("originFromEnv: PORTMARSHAL_SERVICE 优先级最高", () => {
+  const env = new Map([
+    ["PORTMARSHAL_SERVICE", "web"],
+    ["CLAUDECODE", "1"],
+    ["TERM_PROGRAM", "iTerm.app"],
+  ]);
+  assert.equal(originFromEnv((k) => env.get(k)), "run:web");
+});
+
 test("parseMacEnvOrigins 从 ps eww 合并输出按 pid 提取来源", () => {
   const m = parseMacEnvOrigins(PS_EWW_ENV);
   assert.equal(m.get(2755), "claude-code");
@@ -353,4 +362,12 @@ test("displaySource 渲染 detached 的溯源标签", () => {
   };
   assert.equal(displaySource({ ...base, origin: "claude-code" }), "detached (claude-code)");
   assert.equal(displaySource(base), "detached");
+});
+
+test("displaySource: run: 前缀的 detached 直接显示 run:<name>", () => {
+  const p = {
+    pid: 1, ports: [3000], procName: "node", command: "node server.js",
+    cwd: "/tmp/p", inferredProject: null, source: "detached", origin: "run:web",
+  };
+  assert.equal(displaySource(p as never), "run:web");
 });

@@ -151,9 +151,11 @@ export function traceSource(pid: number, table: Map<number, PsRow>, managedServi
 /**
  * 环境变量残留溯源：detached 进程的父链已断，但 fork 时复制的环境块仍带着启动者的标记。
  * 只查白名单 key，返回值仅为来源标签——完整 env 含 secret，绝不进入扫描结果。
- * 优先级：agent 标记 > IDE 标记 > 终端/ssh（Cursor 内置终端同时带 vscode 标记，需先认更具体的启动者）。
+ * 优先级：portmarshal run 标记 > agent 标记 > IDE 标记 > 终端/ssh（Cursor 内置终端同时带 vscode 标记，需先认更具体的启动者）。
  */
 export function originFromEnv(lookup: (key: string) => string | undefined): string | null {
+  const svc = lookup("PORTMARSHAL_SERVICE");
+  if (svc) return `run:${svc}`;
   if (lookup("CLAUDECODE") === "1" || lookup("CLAUDE_CODE_ENTRYPOINT")) return "claude-code";
   const bundle = lookup("__CFBundleIdentifier") ?? "";
   if (/anthropic/i.test(bundle)) return "claude-code";
@@ -576,6 +578,7 @@ export function resolveProjectDir(p: Omit<ProcessInfo, "cwd" | "inferredProject"
 
 export function displaySource(p: ProcessInfo): string {
   if (p.pm2) return `pm2:${p.pm2.name}`;
+  if (p.source === "detached" && p.origin?.startsWith("run:")) return p.origin;
   if (p.source === "detached" && p.origin) return `detached (${p.origin})`;
   if (!p.docker) return p.source;
   const owner = p.docker.composeProject && p.docker.composeService
