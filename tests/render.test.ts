@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatTable, C } from "../src/render.js";
-import { isDeadRun } from "../src/commands/list.js";
+import { formatTable, formatWatchFrame, C } from "../src/render.js";
+import { isDeadRun } from "../src/merge.js";
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -61,4 +61,18 @@ test("isDeadRun: reserved + runPid 已死 → true；其余 false", () => {
   assert.equal(isDeadRun(alive as never), false);
   assert.equal(isDeadRun(plain as never), false);
   assert.equal(isDeadRun({ ...dead, state: "active" } as never), false);
+});
+
+test("formatWatchFrame: run -d 托管 claim 进程已死 → dead 标记；存活/无 runPid 都不标", () => {
+  const deadEntry = { port: 3000, state: "reserved", reg: { name: "web", project: "/p", port: 3000, claimedAt: "", runPid: 999999 } };
+  const aliveEntry = { port: 3001, state: "reserved", reg: { name: "api", project: "/p", port: 3001, claimedAt: "", runPid: process.pid } };
+  const plainEntry = { port: 3002, state: "active", reg: { name: "db", project: "/p", port: 3002, claimedAt: "" } };
+  const out = formatWatchFrame([deadEntry, aliveEntry, plainEntry] as never, new Set([3000, 3001, 3002]));
+  const lines = out.split("\n").map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+  const deadLine = lines.find((l) => l.startsWith("3000"));
+  const aliveLine = lines.find((l) => l.startsWith("3001"));
+  const plainLine = lines.find((l) => l.startsWith("3002"));
+  assert.match(deadLine ?? "", /dead\s*$/);
+  assert.doesNotMatch(aliveLine ?? "", /dead/);
+  assert.doesNotMatch(plainLine ?? "", /dead/);
 });

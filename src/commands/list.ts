@@ -2,10 +2,9 @@ import path from "node:path";
 import type { Flags } from "../cli.js";
 import { EXIT, type MergedEntry } from "../types.js";
 import { scanListeners, isNoise, resolveProjectDir, displaySource } from "../scan.js";
-import { mergeScanRegistry } from "../merge.js";
+import { mergeScanRegistry, isDeadRun } from "../merge.js";
 import { Registry } from "../registry.js";
 import { formatTable, C } from "../render.js";
-import { pidAlive } from "../ready.js";
 
 const STATE_LABEL: Record<string, string> = {
   active: `${C.green}●${C.reset} active`,
@@ -13,11 +12,6 @@ const STATE_LABEL: Record<string, string> = {
   unregistered: "○ unregistered",
   drift: `${C.yellow}⚠ drift${C.reset}`,
 };
-
-/** run -d 托管的 claim：进程已死但记录还在（无监听）→ 提示 dead */
-export function isDeadRun(e: MergedEntry, alive: (pid: number) => boolean = pidAlive): boolean {
-  return e.state === "reserved" && e.reg?.runPid !== undefined && !alive(e.reg.runPid);
-}
 
 export default async function list(flags: Flags): Promise<number> {
   const [scan, registry] = await Promise.all([

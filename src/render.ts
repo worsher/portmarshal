@@ -44,6 +44,7 @@ export function formatTable(header: string[], rows: string[][]): string {
 
 import type { MergedEntry } from "./types.js";
 import { displaySource, resolveProjectDir } from "./scan.js";
+import { isDeadRun } from "./merge.js";
 
 const WATCH_STATE: Record<string, string> = {
   active: `${C.green}●${C.reset}`,
@@ -64,12 +65,14 @@ export function formatWatchFrame(cur: MergedEntry[], prevPorts: Set<number>): st
       e.proc ? displaySource(e.proc) : "-",
       e.reg?.name ?? "-",
       `${color}${proj ?? "?"}${end}`,
+      // spec §4：run -d 托管的 claim 进程已死但记录还在时，list/watch 都要提示 dead
+      isDeadRun(e) ? `${C.red}dead${C.reset}` : "",
     ];
   });
   const now = new Date().toLocaleTimeString("en-US", { hour12: false });
   return (
     `portmarshal watch  ${C.dim}${now}  press q to quit${C.reset}\n\n` +
-    formatTable(["PORT", "STATE", "SOURCE", "CLAIM", "PROJECT"], rows) +
+    formatTable(["PORT", "STATE", "SOURCE", "CLAIM", "PROJECT", ""], rows) +
     "\n"
   );
 }

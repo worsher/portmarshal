@@ -1,5 +1,15 @@
 import type { MergedEntry, ProcessInfo, RegistryEntry } from "./types.js";
 import { resolveProjectDir } from "./scan.js";
+import { pidAlive } from "./ready.js";
+
+/**
+ * run -d 托管的 claim：进程已死但记录还在（无监听）→ 提示 dead。
+ * 放在 merge.ts（而不是 list.ts）是因为 render.ts 的 watch 帧也要用它，
+ * 而 list.ts 反过来又要从 render.ts 取 formatTable/C —— 放 list.ts 会形成循环 import。
+ */
+export function isDeadRun(e: MergedEntry, alive: (pid: number) => boolean = pidAlive): boolean {
+  return e.state === "reserved" && e.reg?.runPid !== undefined && !alive(e.reg.runPid);
+}
 
 export function mergeScanRegistry(
   scan: ProcessInfo[],

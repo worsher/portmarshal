@@ -70,8 +70,10 @@ portmarshal logs <name|port> [--project DIR] [-f|--follow] [-n N]
 
 - `scan.ts` env 溯源 allowlist 加入 `PORTMARSHAL_SERVICE`，且优先级最高（高于 agent 标记）：`run -d` 起的服务在 `list`/`whois`/menubar 显示为 `run:<name>` 而不是 `detached (…)`
 - `gc`：带 `PORTMARSHAL_SERVICE` 标记的进程不列为清理候选（是被管理的服务，不是孤儿遗留）
-- `list`/`watch`：claim 带 `runPid` 但 `kill(pid,0)` 失败（进程已死）时，在现有「claim 无监听 ⚠」路径上追加 `dead` 提示
-- `stop`：无需改动。按端口找监听 pid 走现有护栏，release 走现有逻辑，日志文件保留
+- `list`/`watch`：claim 带 `runPid` 但 `kill(pid,0)` 失败（进程已死）时，在现有「claim 无监听 ⚠」路径上追加 `dead` 提示（`isDeadRun`，`src/merge.ts`；`list` 放 PROJECT 列后，`watch` 同样放 PROJECT 列后新增一列，两处列位置保持一致）
+- `stop`：按端口找监听 pid 走现有护栏、release 走现有逻辑、日志文件保留——但监听 pid 未必是 `run -d` 记录的组长本身。`run -d` 的目标可能是 wrapper 命令（如 nodemon），wrapper 自己 spawn 出真正监听端口的孙进程；只 kill 监听 pid 会把组长（`registry` 里的 `runPid`）晾在原地，claim 转 released、`runPid` 清空后，这个组长仍带着 `PORTMARSHAL_SERVICE` 环境残留，会被 `gc` 的 `run:*` 豁免误认成受管服务，永远清不掉。
+  因此护栏判定通过、确定要停止目标后，若按端口能在 registry 里找到带 `runPid` 的活跃（非 released）记录且该 `runPid` 存活，先对整个进程组发信号（`terminateGroup`：SIGTERM → 宽限 ≤2s 轮询 → SIGKILL，`process.kill(-runPid, sig)`，组不存在时静默）；随后仍走现有的监听 pid `terminate()` 路径，若该 pid 已被组信号带走则容忍 ESRCH（`terminate` 本就把 ESRCH 归一为 `"gone"`）。`terminateGroup` 从 `run.ts` 提取到 `src/ready.ts`，`run.ts`/`stop.ts` 共用同一份实现。docker/pm2 分支不受影响（这两类来源不会有 `runPid` 记录）。
+- `gc`：`run:*` 豁免不再无条件生效，必须有活跃（非 released）registry 记录背书——该记录的 `runPid` 命中候选进程的 pid，或候选进程占用的端口命中该记录声明的端口。没有背书的 `run:*` detached 进程（例如上面 `stop` 只杀了监听 pid、组长被落下的场景）照常进入清理候选，`origin` 仍按 `run:<name>` 展示。过滤逻辑抽成 `gcCandidates`（`src/commands/gc.ts`），不依赖真实 I/O，便于单测覆盖。
 
 ## 5. registry 变更
 
@@ -99,6 +101,8 @@ release 时保留 `logFile`（logs 命令在服务停止后仍可查上一次日
 - readiness 探测：对本地临时 TCP server / HTTP server 验证成功、超时、`--ready-url` 非 2xx 继续等
 - `logs` 定位（name vs 端口数字）、`-n` 截取、NOT_FOUND 路径
 - flags：`-d`、`--wait-timeout`、`--ready-url`、`-f`、`-n` 解析与校验
+- `gcCandidates`：run:* 有/无活跃 entry 背书（runPid 命中、端口命中、entry 已 released、entry 对不上）、非 run:* 无需背书、噪声/非 detached 不入候选
+- `isDeadRun`：list/watch 共用同一份判定，reserved + runPid 已死 → true
 
 冒烟测试（复用现有 run.test.ts 风格，真实 spawn）：
 
@@ -107,6 +111,7 @@ release 时保留 `logFile`（logs 命令在服务停止后仍可查上一次日
 - `stop <port>` 后 claim 转 released、进程组消失、日志文件保留
 - 「永不监听的命令」（如 `sleep`）用短 `--wait-timeout` 走超时失败：退出码 1、进程被杀、claim 已 release
 - 「立即退出的命令」走早死快速失败路径
+- wrapper 型命令（组长 spawn 出真正监听端口的孙进程）：`stop <port>` 后组长与监听孙进程都被组信号杀死，claim 转 released
 
 ## 8. 范围外（YAGNI）
 
