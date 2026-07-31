@@ -201,7 +201,6 @@ test("stop: 组长已退出但原 PGID 仍有监听与非监听子进程 → 仍
       leader.once("exit", () => resolve());
       leader.once("error", reject);
     });
-    leader.unref();
     t.after(() => { try { process.kill(-leaderPid, "SIGKILL"); } catch { /* 已退出 */ } });
 
     await leaderExited;
