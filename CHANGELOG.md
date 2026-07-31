@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0 — 2026-07-30
+## 0.6.0 — 2026-07-31
 
 - Add `portmarshal run -d`: detached mode that captures stdout/stderr to `~/.portmarshal/logs/`, waits for TCP (or `--ready-url` HTTP) readiness before returning, and cleans up the claim and process group on failure
 - Add `portmarshal logs <name|port>` with `-n`, `-f` (follow), and `--json`
