@@ -1,6 +1,20 @@
+import { realpathSync } from "node:fs";
 import type { MergedEntry, ProcessInfo, RegistryEntry } from "./types.js";
 import { resolveProjectDir } from "./scan.js";
 import { pidAlive } from "./ready.js";
+
+/**
+ * macOS 上注册表可能保存符号链接路径（如 /var/folders/...），而 lsof 上报的进程 cwd 是
+ * 内核解析后的真实路径（如 /private/var/folders/...）。在 drift 配对边界统一 realpath；
+ * 目录已经不存在时回退原始字符串。
+ */
+function realpathOrSelf(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
 
 /**
  * run -d 托管的 claim：进程已死但记录还在（无监听）→ 提示 dead。
@@ -32,9 +46,12 @@ export function mergeScanRegistry(
 
   for (const r of out) {
     if (r.state !== "reserved") continue;
-    const peer = out.find(
-      (e) => e.state === "unregistered" && e.proc && resolveProjectDir(e.proc) === r.reg!.project,
-    );
+    const regProject = realpathOrSelf(r.reg!.project);
+    const peer = out.find((e) => {
+      if (e.state !== "unregistered" || !e.proc) return false;
+      const project = resolveProjectDir(e.proc);
+      return project !== null && realpathOrSelf(project) === regProject;
+    });
     if (peer) {
       r.state = "drift";
       r.driftPeer = peer.port;

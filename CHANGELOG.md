@@ -8,6 +8,7 @@
 - `list` marks a managed run whose process has died as `dead`
 - Registry entries record `runPid`/`logFile`; log files survive release so the last run stays inspectable
 - Harden detached lifecycle cleanup: release claims on log setup failure, clean up on readiness-wait signals, detect log rotation by inode, and verify whole process groups before escalation
+- Normalize symlinked project paths when pairing reserved and unregistered entries into drift, fixing macOS `/var` versus `/private/var` mismatches
 
 ## 0.5.0 — 2026-07-27
 

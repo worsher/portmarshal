@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { mergeScanRegistry } from "../src/merge.js";
 import type { ProcessInfo, RegistryEntry } from "../src/types.js";
 
@@ -27,6 +30,24 @@ test("unregistered：在监听未注册", () => {
 
 test("drift：同项目注册 3000 未监听 + 监听 3001 未注册", () => {
   const out = mergeScanRegistry([proc(1, [3001], "/p/a")], [reg("web", "/p/a", 3000)]);
+  const drift3000 = out.find((e) => e.port === 3000)!;
+  const drift3001 = out.find((e) => e.port === 3001)!;
+  assert.equal(drift3000.state, "drift");
+  assert.equal(drift3000.driftPeer, 3001);
+  assert.equal(drift3001.state, "drift");
+  assert.equal(drift3001.driftPeer, 3000);
+});
+
+test("drift：注册路径经符号链接、进程 cwd 为真实路径时仍能配对", (t) => {
+  const realDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "portmarshal-merge-"));
+  const linkDir = `${realDir}-link`;
+  fs.symlinkSync(realDir, linkDir);
+  t.after(() => {
+    fs.unlinkSync(linkDir);
+    fs.rmSync(realDir, { recursive: true, force: true });
+  });
+
+  const out = mergeScanRegistry([proc(1, [3001], realDir)], [reg("web", linkDir, 3000)]);
   const drift3000 = out.find((e) => e.port === 3000)!;
   const drift3001 = out.find((e) => e.port === 3001)!;
   assert.equal(drift3000.state, "drift");
