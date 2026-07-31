@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
 import http from "node:http";
-import { waitReady, pidAlive } from "../src/ready.js";
+import { spawn } from "node:child_process";
+import { waitReady, pidAlive, processGroupAlive, terminateGroup } from "../src/ready.js";
 
 function listen(srv: net.Server | http.Server): Promise<number> {
   return new Promise((r) => srv.listen(0, "127.0.0.1", () => r((srv.address() as net.AddressInfo).port)));
@@ -52,4 +53,75 @@ test("waitReady: --ready-url 等到 HTTP 2xx 才 ok，5xx 继续等", async () =
     const res = await waitReady({ port, pid: process.pid, readyUrl: "/health", timeoutMs: 5000, intervalMs: 50 });
     assert.deepEqual(res, { ok: true });
   } finally { srv.close(); }
+});
+
+test("waitReady: AbortSignal 中断正在进行的就绪等待", async () => {
+  const srv = net.createServer();
+  const port = await listen(srv);
+  await new Promise<void>((r) => srv.close(() => r()));
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 20);
+  const start = Date.now();
+  const res = await waitReady({
+    port,
+    pid: process.pid,
+    timeoutMs: 10_000,
+    intervalMs: 1000,
+    signal: controller.signal,
+  });
+  assert.deepEqual(res, { ok: false, reason: "aborted" });
+  assert.ok(Date.now() - start < 1000);
+});
+
+async function waitUntil(pred: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!pred() && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
+test("terminateGroup: 组长先退出但子进程忽略 SIGTERM 时仍会 SIGKILL 整个 PGID", async (t) => {
+  const stubbornChild = `
+    process.on("SIGTERM", () => {});
+    process.stdout.write("ready\\n");
+    setInterval(() => {}, 1000);
+  `;
+  const leaderScript = `
+    const { spawn } = require("child_process");
+    const child = spawn(process.execPath, ["-e", ${JSON.stringify(stubbornChild)}], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    child.stdout.once("data", () => process.stdout.write(String(child.pid) + "\\n"));
+    setInterval(() => {}, 1000);
+  `;
+  const leader = spawn(process.execPath, ["-e", leaderScript], {
+    detached: true,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const pgid = leader.pid!;
+  t.after(() => {
+    try { process.kill(-pgid, "SIGKILL"); } catch { /* 已退出 */ }
+  });
+
+  const childPid = await new Promise<number>((resolve, reject) => {
+    let output = "";
+    const timer = setTimeout(() => reject(new Error("timed out waiting for stubborn child")), 3000);
+    leader.stdout!.on("data", (chunk) => {
+      output += chunk.toString();
+      const line = output.split("\n")[0];
+      if (/^\d+$/.test(line)) {
+        clearTimeout(timer);
+        resolve(Number(line));
+      }
+    });
+    leader.once("error", reject);
+  });
+  assert.equal(pidAlive(pgid), true);
+  assert.equal(pidAlive(childPid), true);
+  assert.equal(processGroupAlive(pgid), true);
+
+  await terminateGroup(pgid, 200);
+  await waitUntil(() => !processGroupAlive(pgid));
+  assert.equal(processGroupAlive(pgid), false);
+  assert.equal(pidAlive(childPid), false);
 });

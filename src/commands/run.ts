@@ -17,6 +17,32 @@ export function substitutePort(args: string[], port: number): string[] {
   return args.map((a) => a.split("{port}").join(String(port)));
 }
 
+async function releaseClaim(registry: Registry, name: string, project: string): Promise<boolean> {
+  try {
+    await registry.release(name, project);
+    return true;
+  } catch (error) {
+    process.stderr.write(`portmarshal: failed to release claim: ${(error as Error).message}\n`);
+    return false;
+  }
+}
+
+async function cleanupDetached(
+  registry: Registry,
+  name: string,
+  project: string,
+  pgid: number,
+): Promise<boolean> {
+  try {
+    await terminateGroup(pgid);
+  } catch (error) {
+    // 未能确认进程组已停止时保留活跃 claim，避免把仍在运行的服务伪装成已释放。
+    process.stderr.write(`portmarshal: failed to stop process group ${pgid}: ${(error as Error).message}\n`);
+    return false;
+  }
+  return releaseClaim(registry, name, project);
+}
+
 async function claimPort(registry: Registry, name: string, project: string, flags: Flags): Promise<number> {
   const { port } = await registry.claim({
     name, project,
@@ -105,17 +131,32 @@ async function runDetached(
   registry: Registry, flags: Flags,
 ): Promise<number> {
   const logFile = logFilePath(project, name);
-  await rotateLog(logFile);
-  const fd = await fs.open(logFile, "a");
+  let fd: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    await rotateLog(logFile);
+    fd = await fs.open(logFile, "a");
+  } catch (error) {
+    process.stderr.write(`portmarshal: failed to prepare log file ${logFile}: ${(error as Error).message}\n`);
+    await releaseClaim(registry, name, project);
+    return EXIT.ERR;
+  }
 
-  const child = spawn(argv[0], argv.slice(1), {
-    stdio: ["ignore", fd.fd, fd.fd],
-    detached: true, // 自成进程组：失败清理时信号覆盖整组
-    // cwd 必须钉在 project：detached 子进程没有终端 cwd 可继承参照，
-    // 且 scan 的项目归属（restart 护栏、claim 复用校验）都按 cwd 匹配 project，不钉住会让旧实例识别不到自己。
-    cwd: project,
-    env: { ...process.env, PORT: String(port), PORTMARSHAL_SERVICE: name },
-  });
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(argv[0], argv.slice(1), {
+      stdio: ["ignore", fd.fd, fd.fd],
+      detached: true, // 自成进程组：失败清理时信号覆盖整组
+      // cwd 必须钉在 project：detached 子进程没有终端 cwd 可继承参照，
+      // 且 scan 的项目归属（restart 护栏、claim 复用校验）都按 cwd 匹配 project，不钉住会让旧实例识别不到自己。
+      cwd: project,
+      env: { ...process.env, PORT: String(port), PORTMARSHAL_SERVICE: name },
+    });
+  } catch (error) {
+    await fd.close().catch(() => {});
+    process.stderr.write(`portmarshal: failed to start ${argv[0]}: ${(error as Error).message}\n`);
+    await releaseClaim(registry, name, project);
+    return EXIT.ERR;
+  }
   const spawnErr = await new Promise<Error | null>((resolve) => {
     child.once("spawn", () => resolve(null));
     child.once("error", (e) => resolve(e));
@@ -123,25 +164,53 @@ async function runDetached(
   await fd.close(); // 子进程持有 fd 副本，父进程侧即可关闭
   if (spawnErr || child.pid === undefined) {
     process.stderr.write(`portmarshal: failed to start ${argv[0]}: ${spawnErr?.message ?? "no pid"}\n`);
-    await registry.release(name, project).catch(() => {});
+    await releaseClaim(registry, name, project);
     return EXIT.ERR;
   }
   child.unref();
-  await registry.setRunInfo(name, project, { runPid: child.pid, logFile });
 
-  const ready = await waitReady({
-    port, pid: child.pid, readyUrl: flags.readyUrl,
-    timeoutMs: (flags.waitTimeout ?? 30) * 1000,
-  });
+  const controller = new AbortController();
+  let interruptedBy: (typeof FORWARDED)[number] | undefined;
+  const handlers = new Map<(typeof FORWARDED)[number], () => void>();
+  for (const signal of FORWARDED) {
+    const handler = () => {
+      interruptedBy ??= signal;
+      controller.abort();
+    };
+    handlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+
+  let ready: Awaited<ReturnType<typeof waitReady>>;
+  try {
+    await registry.setRunInfo(name, project, { runPid: child.pid, logFile });
+    ready = await waitReady({
+      port, pid: child.pid, readyUrl: flags.readyUrl,
+      timeoutMs: (flags.waitTimeout ?? 30) * 1000,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    process.stderr.write(`portmarshal: failed while tracking ${name}@${project}: ${(error as Error).message}\n`);
+    await cleanupDetached(registry, name, project, child.pid);
+    return EXIT.ERR;
+  } finally {
+    for (const [signal, handler] of handlers) process.removeListener(signal, handler);
+  }
+
   if (!ready.ok) {
+    if (ready.reason === "aborted") {
+      const signal = interruptedBy ?? "SIGTERM";
+      process.stderr.write(`portmarshal: interrupted by ${signal}; stopping ${name}@${project}\n`);
+      await cleanupDetached(registry, name, project, child.pid);
+      return 128 + (os.constants.signals[signal] ?? 1);
+    }
     const why = ready.reason === "died" ? "process exited before becoming ready" : "readiness wait timed out";
     const tail = await tailLines(logFile, 20).catch(() => []);
     process.stderr.write(
       `portmarshal: ${name}@${project} failed to become ready on port ${port}: ${why}\n` +
       (tail.length ? `--- last ${tail.length} log lines (${logFile}) ---\n${tail.join("\n")}\n` : ""),
     );
-    await terminateGroup(child.pid);
-    await registry.release(name, project).catch(() => {});
+    await cleanupDetached(registry, name, project, child.pid);
     return EXIT.ERR;
   }
   process.stderr.write(

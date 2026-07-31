@@ -40,6 +40,7 @@ portmarshal run -d <name> [--wait-timeout N] [--ready-url PATH] [--prefer N] [--
    - 每轮同时用 `kill(pid, 0)` 检测子进程是否已死，死了立即走失败路径（不等超时）
 6. 成功：stderr 打印 `portmarshal: ready <name>@<project> on port <port> (pid <pid>, logs: <path>)`，退出码 0
 7. 失败（超时或子进程早死）：打印日志尾部约 20 行到 stderr，对进程组 SIGTERM→宽限→SIGKILL，release claim，退出码 1（`EXIT.ERR`）
+8. 等待就绪期间收到 SIGINT/SIGTERM/SIGHUP：中断 TCP/HTTP 探测，停止整个进程组并 release claim；进程退出码按信号使用 130/143/129
 
 前台 `run`（不带 `-d`）行为完全不变，就绪等待不适用于前台模式。
 
@@ -89,9 +90,10 @@ release 时保留 `logFile`（logs 命令在服务停止后仍可查上一次日
 ## 6. 错误处理要点
 
 - spawn 失败（命令不存在）：立即 release、报错退出 1
-- 日志目录创建失败：报错退出 1，不启动服务
+- 日志目录创建或日志文件打开失败：立即 release、报错退出 1，不启动服务
 - 就绪失败清理时进程组已不存在：忽略 ESRCH，照常 release
 - `logs -f` 期间文件被轮转（服务重启）：检测 inode/size 回退，重新从头打开新文件
+- 进程组清理按负 PGID 探测整个组是否仍存在，不能只根据组长 PID 退出就提前结束宽限等待
 
 ## 7. 测试
 
@@ -100,6 +102,7 @@ release 时保留 `logFile`（logs 命令在服务停止后仍可查上一次日
 - 日志轮转：`.log` → `.log.old` 覆盖语义
 - readiness 探测：对本地临时 TCP server / HTTP server 验证成功、超时、`--ready-url` 非 2xx 继续等
 - `logs` 定位（name vs 端口数字）、`-n` 截取、NOT_FOUND 路径
+- `logs -f`：inode 变化且新文件大于旧读取位置时，仍从新文件开头继续输出
 - flags：`-d`、`--wait-timeout`、`--ready-url`、`-f`、`-n` 解析与校验
 - `gcCandidates`：run:* 有/无活跃 entry 背书（runPid 命中、端口命中、entry 已 released、entry 对不上）、非 run:* 无需背书、噪声/非 detached 不入候选
 - `isDeadRun`：list/watch 共用同一份判定，reserved + runPid 已死 → true
@@ -111,7 +114,10 @@ release 时保留 `logFile`（logs 命令在服务停止后仍可查上一次日
 - `stop <port>` 后 claim 转 released、进程组消失、日志文件保留
 - 「永不监听的命令」（如 `sleep`）用短 `--wait-timeout` 走超时失败：退出码 1、进程被杀、claim 已 release
 - 「立即退出的命令」走早死快速失败路径
+- 日志初始化失败：不 spawn 子进程，claim 立即转 released
+- 等待就绪期间收到 SIGINT：进程组消失、claim 转 released、CLI 返回 130
 - wrapper 型命令（组长 spawn 出真正监听端口的孙进程）：`stop <port>` 后组长与监听孙进程都被组信号杀死，claim 转 released
+- 组长收到 SIGTERM 后先退出、孙进程忽略 SIGTERM：宽限结束后仍按 PGID 发 SIGKILL，整个组消失
 
 ## 8. 范围外（YAGNI）
 

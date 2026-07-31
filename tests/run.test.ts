@@ -7,9 +7,11 @@ import net from "node:net";
 import { spawn } from "node:child_process";
 import type { Flags } from "../src/flags.js";
 import run, { substitutePort } from "../src/commands/run.js";
+import logs from "../src/commands/logs.js";
+import stop from "../src/commands/stop.js";
 import type { RegistryEntry } from "../src/types.js";
 import { Registry } from "../src/registry.js";
-import { pidAlive } from "../src/ready.js";
+import { pidAlive, processGroupAlive } from "../src/ready.js";
 
 function flagsOf(over: Partial<Flags>): Flags {
   return {
@@ -30,6 +32,20 @@ async function withStateDir<T>(fn: (stateDir: string) => Promise<T>): Promise<T>
 
 async function loadEntries(stateDir: string): Promise<RegistryEntry[]> {
   return JSON.parse(await fs.readFile(path.join(stateDir, "registry.json"), "utf8"));
+}
+
+async function captureStdout<T>(fn: () => Promise<T>): Promise<{ result: T; output: string }> {
+  const chunks: string[] = [];
+  const original = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    chunks.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    return { result: await fn(), output: chunks.join("") };
+  } finally {
+    process.stdout.write = original;
+  }
 }
 
 test("substitutePort 替换每个参数中的所有 {port}", () => {
@@ -183,6 +199,109 @@ test("run -d: 就绪后返回 0，registry 记录 runPid/logFile，服务继续�
     // 日志已落盘
     const log = await fs.readFile(entry.logFile!, "utf8");
     assert.match(log, /server up/);
+
+    // 真实 run -d 产出的 registry/logFile 可分别按 name 和 port 查询。
+    const byName = await captureStdout(() => logs(flagsOf({
+      positional: ["web"], project, lines: 50,
+    })));
+    assert.equal(byName.result, 0);
+    assert.match(byName.output, /server up/);
+    const byPort = await captureStdout(() => logs(flagsOf({
+      positional: [String(entry.port)], project, lines: 50,
+    })));
+    assert.equal(byPort.result, 0);
+    assert.match(byPort.output, /server up/);
+
+    // stop 后整个进程组消失、claim released，但日志指针与文件仍保留。
+    assert.equal(await stop(flagsOf({ positional: [String(entry.port)], project })), 0);
+    await waitUntil(() => !processGroupAlive(entry.runPid!), 3000);
+    assert.equal(processGroupAlive(entry.runPid!), false);
+    const released = (await loadEntries(stateDir)).find((e) => e.name === "web")!;
+    assert.equal(released.released, true);
+    assert.equal(released.runPid, undefined);
+    assert.equal(released.logFile, entry.logFile);
+    assert.match(await fs.readFile(released.logFile!, "utf8"), /server up/);
+  });
+});
+
+test("run -d: 日志初始化失败时不启动服务并立即 release claim", async () => {
+  await withStateDir(async (stateDir) => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-proj-"));
+    try {
+      // logFilePath 会落在 stateDir/logs；预先放一个同名普通文件，稳定触发 mkdir EEXIST。
+      await fs.writeFile(path.join(stateDir, "logs"), "not a directory");
+      const code = await run(flagsOf({
+        positional: ["web"], project, prefer: 18835, detach: true,
+        rest: [process.execPath, "-e", "setInterval(()=>{}, 1000)"],
+      }));
+      assert.equal(code, 1);
+      const entry = (await loadEntries(stateDir)).find((e) => e.name === "web");
+      assert.ok(entry);
+      assert.equal(entry.released, true);
+      assert.equal(entry.runPid, undefined);
+    } finally {
+      await fs.rm(project, { recursive: true, force: true });
+    }
+  });
+});
+
+async function waitForRunEntry(stateDir: string, timeoutMs = 5000): Promise<RegistryEntry> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const entries = await loadEntries(stateDir).catch(() => []);
+    const entry = entries.find((e) => !e.released && e.runPid !== undefined);
+    if (entry) return entry;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error("timed out waiting for runPid in registry");
+}
+
+test("run -d: 等待就绪期间收到 SIGINT 会停止进程组并 release claim", async (t) => {
+  await withStateDir(async (stateDir) => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-proj-"));
+    t.after(() => fs.rm(project, { recursive: true, force: true }));
+    const cli = spawn(
+      path.resolve("node_modules/.bin/tsx"),
+      [
+        "src/cli.ts", "run", "web", "-d",
+        "--wait-timeout", "30",
+        "--prefer", "18836",
+        "--project", project,
+        "--", process.execPath, "-e", "setInterval(()=>{}, 1000)",
+      ],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, PORTMARSHAL_STATE_DIR: stateDir },
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
+    let stderr = "";
+    cli.stderr!.on("data", (chunk) => { stderr += chunk.toString(); });
+    t.after(() => { if (cli.exitCode === null) cli.kill("SIGKILL"); });
+
+    const entry = await waitForRunEntry(stateDir);
+    const pgid = entry.runPid!;
+    t.after(() => {
+      try { process.kill(-pgid, "SIGKILL"); } catch { /* 已退出 */ }
+    });
+    assert.equal(processGroupAlive(pgid), true);
+    assert.equal(cli.kill("SIGINT"), true);
+
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`CLI did not exit after SIGINT: ${stderr}`)), 5000);
+      cli.once("exit", (code, signal) => {
+        clearTimeout(timer);
+        resolve({ code, signal });
+      });
+      cli.once("error", reject);
+    });
+    assert.deepEqual(exit, { code: 130, signal: null });
+    assert.match(stderr, /interrupted by SIGINT/);
+    await waitUntil(() => !processGroupAlive(pgid), 3000);
+    assert.equal(processGroupAlive(pgid), false);
+    const released = (await loadEntries(stateDir)).find((e) => e.name === "web")!;
+    assert.equal(released.released, true);
+    assert.equal(released.runPid, undefined);
   });
 });
 

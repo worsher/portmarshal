@@ -115,12 +115,12 @@ export default async function stop(flags: Flags): Promise<number> {
   // 此时 claim 即将转 released、runPid 会被清空，组长却还带着 PORTMARSHAL_SERVICE 环境变量残留，
   // 会被 gc 的 run:* 豁免误认成受管服务，永远进不了清理候选。这里先对整组发信号兜底。
   const runEntry = entries.find((e) => !e.released && e.port === port && e.runPid !== undefined);
-  if (runEntry?.runPid !== undefined && pidAlive(runEntry.runPid)) {
-    await terminateGroup(runEntry.runPid);
-  }
 
   let how: "term" | "kill" | "gone" | "docker-stop" | "pm2-stop";
   try {
+    if (runEntry?.runPid !== undefined && pidAlive(runEntry.runPid)) {
+      await terminateGroup(runEntry.runPid);
+    }
     if (proc.pm2) {
       await stopPm2Process(proc.pm2.pmId);
       how = "pm2-stop";

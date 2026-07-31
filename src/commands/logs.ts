@@ -28,24 +28,51 @@ export function locateEntry(
   );
 }
 
-/** 轮询式 tail -f：size 回退（轮转/截断）时从头重读新文件 */
-async function follow(file: string, fromPos: number): Promise<never> {
-  let pos = fromPos;
-  for (;;) {
+export interface FollowCursor {
+  position: number;
+  dev: number;
+  ino: number;
+}
+
+export interface FollowOptions {
+  intervalMs?: number;
+  signal?: AbortSignal;
+  write?: (chunk: Buffer) => void;
+}
+
+/** 轮询式 tail -f：inode 变化（轮转）或 size 回退（截断）时从头重读新文件 */
+export async function followLog(
+  file: string,
+  cursor: FollowCursor,
+  options: FollowOptions = {},
+): Promise<void> {
+  let pos = cursor.position;
+  let dev = cursor.dev;
+  let ino = cursor.ino;
+  const interval = options.intervalMs ?? 200;
+  const write = options.write ?? ((chunk: Buffer) => { process.stdout.write(chunk); });
+
+  while (!options.signal?.aborted) {
     const st = await fs.stat(file).catch(() => null);
     if (st) {
-      if (st.size < pos) pos = 0;
+      if (st.dev !== dev || st.ino !== ino || st.size < pos) {
+        pos = 0;
+        dev = st.dev;
+        ino = st.ino;
+      }
       if (st.size > pos) {
         await new Promise<void>((resolve, reject) => {
           const stream = createReadStream(file, { start: pos, end: st.size - 1 });
-          stream.on("data", (chunk) => process.stdout.write(chunk));
+          stream.on("data", (chunk) => write(Buffer.from(chunk)));
           stream.on("end", resolve);
           stream.on("error", reject);
         });
         pos = st.size;
       }
     }
-    await new Promise((r) => setTimeout(r, 200));
+    if (!options.signal?.aborted) {
+      await new Promise((r) => setTimeout(r, interval));
+    }
   }
 }
 
@@ -82,8 +109,16 @@ export default async function logs(flags: Flags): Promise<number> {
   }
   if (lines.length) process.stdout.write(lines.join("\n") + "\n");
   if (flags.follow) {
-    const size = (await fs.stat(entry.logFile).catch(() => null))?.size ?? 0;
-    await follow(entry.logFile, size); // 永不返回，Ctrl-C 退出
+    const st = await fs.stat(entry.logFile).catch(() => null);
+    if (!st) {
+      process.stderr.write(`Log file is gone: ${entry.logFile}\n`);
+      return EXIT.NOT_FOUND;
+    }
+    await followLog(entry.logFile, {
+      position: st.size,
+      dev: st.dev,
+      ino: st.ino,
+    }); // CLI 下持续运行，Ctrl-C 由默认信号行为退出
   }
   return EXIT.OK;
 }

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Flags } from "../src/flags.js";
 import type { RegistryEntry } from "../src/types.js";
-import logs, { locateEntry } from "../src/commands/logs.js";
+import logs, { followLog, locateEntry } from "../src/commands/logs.js";
 
 function flagsOf(over: Partial<Flags>): Flags {
   return {
@@ -80,5 +80,47 @@ test("logs --json: 输出结构化结果；与 -f 互斥", async () => {
     process.stdout.write = orig;
     delete process.env.PORTMARSHAL_STATE_DIR;
     await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+async function waitUntil(pred: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!pred() && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.equal(pred(), true, "condition did not become true before timeout");
+}
+
+test("followLog: inode 轮转后即使新文件更大，也从新文件开头继续输出", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pm-follow-"));
+  const file = path.join(dir, "service.log");
+  await fs.writeFile(file, "old-start\n");
+  const initial = await fs.stat(file);
+  const controller = new AbortController();
+  let output = "";
+  const following = followLog(
+    file,
+    { position: initial.size, dev: initial.dev, ino: initial.ino },
+    {
+      intervalMs: 10,
+      signal: controller.signal,
+      write: (chunk) => { output += chunk.toString("utf8"); },
+    },
+  );
+
+  try {
+    await fs.appendFile(file, "old-next\n");
+    await waitUntil(() => output.includes("old-next"));
+
+    await fs.rename(file, file + ".old");
+    const newContent = `new-start\n${"x".repeat(64)}\n`;
+    await fs.writeFile(file, newContent);
+    await waitUntil(() => output.includes("new-start"));
+    assert.match(output, /old-next/);
+    assert.match(output, /new-start/);
+  } finally {
+    controller.abort();
+    await following;
+    await fs.rm(dir, { recursive: true, force: true });
   }
 });
