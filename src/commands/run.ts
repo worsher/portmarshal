@@ -157,21 +157,15 @@ async function runDetached(
     await releaseClaim(registry, name, project);
     return EXIT.ERR;
   }
-  const spawnErr = await new Promise<Error | null>((resolve) => {
-    child.once("spawn", () => resolve(null));
-    child.once("error", (e) => resolve(e));
-  });
-  await fd.close(); // 子进程持有 fd 副本，父进程侧即可关闭
-  if (spawnErr || child.pid === undefined) {
-    process.stderr.write(`portmarshal: failed to start ${argv[0]}: ${spawnErr?.message ?? "no pid"}\n`);
-    await releaseClaim(registry, name, project);
-    return EXIT.ERR;
-  }
-  child.unref();
 
+  // spawn() 返回后、第一次 await 之前同步安装信号处理器。Node 只会在事件循环重新取得控制权时
+  // 派发信号，因此这样可覆盖等待 spawn 事件和关闭父侧日志 fd 的窗口，避免父进程先退出而遗留 detached 子进程。
   const controller = new AbortController();
   let interruptedBy: (typeof FORWARDED)[number] | undefined;
   const handlers = new Map<(typeof FORWARDED)[number], () => void>();
+  const removeSignalHandlers = () => {
+    for (const [signal, handler] of handlers) process.removeListener(signal, handler);
+  };
   for (const signal of FORWARDED) {
     const handler = () => {
       interruptedBy ??= signal;
@@ -180,6 +174,30 @@ async function runDetached(
     handlers.set(signal, handler);
     process.on(signal, handler);
   }
+
+  const spawnErr = await new Promise<Error | null>((resolve) => {
+    child.once("spawn", () => resolve(null));
+    child.once("error", (e) => resolve(e));
+  });
+  let fdCloseErr: unknown;
+  try {
+    await fd.close(); // 子进程持有 fd 副本，父进程侧即可关闭
+  } catch (error) {
+    fdCloseErr = error;
+  }
+  if (spawnErr || child.pid === undefined || fdCloseErr) {
+    removeSignalHandlers();
+    const detail = spawnErr?.message
+      ?? (fdCloseErr ? `failed to close parent log descriptor: ${(fdCloseErr as Error).message}` : "no pid");
+    process.stderr.write(`portmarshal: failed to start ${argv[0]}: ${detail}\n`);
+    if (child.pid !== undefined) {
+      await cleanupDetached(registry, name, project, child.pid);
+    } else {
+      await releaseClaim(registry, name, project);
+    }
+    return EXIT.ERR;
+  }
+  child.unref();
 
   let ready: Awaited<ReturnType<typeof waitReady>>;
   try {
@@ -194,7 +212,14 @@ async function runDetached(
     await cleanupDetached(registry, name, project, child.pid);
     return EXIT.ERR;
   } finally {
-    for (const [signal, handler] of handlers) process.removeListener(signal, handler);
+    removeSignalHandlers();
+  }
+
+  // waitReady 可能已准备返回成功，而信号恰好在 Promise 恢复到 finally 前到达；信号优先，仍执行整组清理。
+  if (ready.ok && interruptedBy) {
+    process.stderr.write(`portmarshal: interrupted by ${interruptedBy}; stopping ${name}@${project}\n`);
+    await cleanupDetached(registry, name, project, child.pid);
+    return 128 + (os.constants.signals[interruptedBy] ?? 1);
   }
 
   if (!ready.ok) {

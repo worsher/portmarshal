@@ -4,7 +4,7 @@ import type { Flags } from "../cli.js";
 import { EXIT } from "../types.js";
 import { scanListeners, classifyTarget, terminate, resolveProjectDir, displaySource } from "../scan.js";
 import { Registry } from "../registry.js";
-import { pidAlive, terminateGroup } from "../ready.js";
+import { processGroupAlive, terminateGroup } from "../ready.js";
 
 function osascript(script: string): Promise<{ ok: boolean }> {
   return new Promise((resolve) => {
@@ -118,7 +118,9 @@ export default async function stop(flags: Flags): Promise<number> {
 
   let how: "term" | "kill" | "gone" | "docker-stop" | "pm2-stop";
   try {
-    if (runEntry?.runPid !== undefined && pidAlive(runEntry.runPid)) {
+    // 组长可以在真正的监听进程启动后自行退出（daemon/wrapper 常见行为），
+    // 但原 PGID 只要还有成员就仍然有效，因此不能用正 PID 存活与否决定是否跳过整组清理。
+    if (runEntry?.runPid !== undefined && processGroupAlive(runEntry.runPid)) {
       await terminateGroup(runEntry.runPid);
     }
     if (proc.pm2) {

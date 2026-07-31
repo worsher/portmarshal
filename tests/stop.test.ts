@@ -10,7 +10,7 @@ import type { ProcessInfo, RegistryEntry } from "../src/types.js";
 import type { Flags } from "../src/flags.js";
 import stop from "../src/commands/stop.js";
 import { Registry } from "../src/registry.js";
-import { pidAlive } from "../src/ready.js";
+import { pidAlive, processGroupAlive } from "../src/ready.js";
 
 function proc(over: Partial<ProcessInfo>): ProcessInfo {
   return {
@@ -163,6 +163,72 @@ test("stop: wrapper 组长本身不监听、孙进程才监听 → stop 对整�
     await waitUntil(() => !pidAlive(leaderPid) && !pidAlive(listenerPid), 3000);
     assert.equal(pidAlive(leaderPid), false, "组长应已被组信号杀死");
     assert.equal(pidAlive(listenerPid), false, "监听孙进程应已被组信号杀死");
+
+    const entries: RegistryEntry[] = JSON.parse(
+      await fs.readFile(path.join(stateDir, "registry.json"), "utf8"),
+    );
+    const entry = entries.find((e) => e.name === "web" && e.project === project);
+    assert.ok(entry);
+    assert.equal(entry!.released, true);
+  });
+});
+
+test("stop: 组长已退出但原 PGID 仍有监听与非监听子进程 → 仍清理整个进程组", async (t) => {
+  await withStateDir(async (stateDir) => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-proj-"));
+    t.after(() => fs.rm(project, { recursive: true, force: true }));
+
+    const registry = new Registry();
+    const { port } = await registry.claim({ name: "web", project, prefer: 18846, claimedBy: "test" });
+    const serveCode = `require("http").createServer((q,r)=>r.end("ok")).listen(${port},"127.0.0.1")`;
+    const idleCode = "setInterval(() => {}, 1000)";
+    const leaderScript = `
+      const { spawn } = require("child_process");
+      const listener = spawn(${JSON.stringify(process.execPath)}, ["-e", ${JSON.stringify(serveCode)}], { stdio: "ignore" });
+      const idle = spawn(${JSON.stringify(process.execPath)}, ["-e", ${JSON.stringify(idleCode)}], { stdio: "ignore" });
+      listener.unref();
+      idle.unref();
+      process.stdout.write(JSON.stringify({ listenerPid: listener.pid, idlePid: idle.pid }));
+    `;
+    const leader = spawn(process.execPath, ["-e", leaderScript], {
+      cwd: project, detached: true, stdio: ["ignore", "pipe", "ignore"],
+    });
+    const leaderPid = leader.pid!;
+    let childPidsJson = "";
+    leader.stdout!.setEncoding("utf8");
+    leader.stdout!.on("data", (chunk: string) => { childPidsJson += chunk; });
+    const leaderExited = new Promise<void>((resolve, reject) => {
+      leader.once("exit", () => resolve());
+      leader.once("error", reject);
+    });
+    leader.unref();
+    t.after(() => { try { process.kill(-leaderPid, "SIGKILL"); } catch { /* 已退出 */ } });
+
+    await leaderExited;
+    const { listenerPid, idlePid } = JSON.parse(childPidsJson) as {
+      listenerPid: number;
+      idlePid: number;
+    };
+    await waitListening(port);
+    assert.equal(pidAlive(leaderPid), false, "组长应已在 stop 前退出");
+    assert.equal(processGroupAlive(leaderPid), true, "原 PGID 应仍由两个子进程维持");
+    assert.equal(pidAlive(listenerPid), true);
+    assert.equal(pidAlive(idlePid), true);
+
+    await registry.setRunInfo("web", project, {
+      runPid: leaderPid,
+      logFile: path.join(project, "web.log"),
+    });
+
+    const code = await stop(stopFlagsOf({ positional: [String(port)], project }));
+    assert.equal(code, 0);
+    await waitUntil(
+      () => !processGroupAlive(leaderPid) && !pidAlive(listenerPid) && !pidAlive(idlePid),
+      3000,
+    );
+    assert.equal(processGroupAlive(leaderPid), false, "整个原 PGID 都应被清理");
+    assert.equal(pidAlive(listenerPid), false, "监听子进程应退出");
+    assert.equal(pidAlive(idlePid), false, "同组非监听子进程也应退出");
 
     const entries: RegistryEntry[] = JSON.parse(
       await fs.readFile(path.join(stateDir, "registry.json"), "utf8"),
