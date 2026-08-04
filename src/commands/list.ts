@@ -15,7 +15,7 @@ const STATE_LABEL: Record<string, string> = {
 
 export default async function list(flags: Flags): Promise<number> {
   const [scan, registry] = await Promise.all([
-    scanListeners(),
+    scanListeners(undefined, undefined, !flags.showSensitiveCommand),
     new Registry().load(),
   ]);
   const filtered = flags.all ? scan : scan.filter((p) => !isNoise(p.procName));

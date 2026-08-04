@@ -19,8 +19,10 @@ function proc(over: Partial<ProcessInfo>): ProcessInfo {
   };
 }
 
-test("classifyTarget: 脱离会话 → detached", () => {
-  assert.equal(classifyTarget(proc({ source: "detached" }), "/p/me", []), "detached");
+test("classifyTarget: detached 仍先按实时项目判断；未知归属才进入 guarded detached", () => {
+  assert.equal(classifyTarget(proc({ source: "detached", cwd: "/p/me" }), "/p/me", []), "own");
+  assert.equal(classifyTarget(proc({ source: "detached", cwd: "/p/other" }), "/p/me", []), "foreign");
+  assert.equal(classifyTarget(proc({ source: "detached", cwd: null }), "/p/me", []), "detached");
 });
 
 test("classifyTarget: cwd 同项目 → own", () => {
@@ -28,24 +30,25 @@ test("classifyTarget: cwd 同项目 → own", () => {
   assert.equal(classifyTarget(proc({ cwd: "/p/me/sub" }), "/p/me", []), "own");
 });
 
-test("classifyTarget: 注册记录属于调用方项目 → own", () => {
+test("classifyTarget: 实时项目归属与旧 claim 冲突时以实时归属为准", () => {
   const reg: RegistryEntry[] = [{ name: "web", project: "/p/me", port: 3000, claimedAt: new Date().toISOString() }];
-  assert.equal(classifyTarget(proc({ cwd: "/elsewhere" }), "/p/me", reg), "own");
+  assert.equal(classifyTarget(proc({ cwd: "/elsewhere" }), "/p/me", reg), "foreign");
+  assert.equal(classifyTarget(proc({ cwd: null }), "/p/me", reg), "own");
 });
 
 test("classifyTarget: 他人活跃服务 → foreign", () => {
   assert.equal(classifyTarget(proc({}), "/p/me", []), "foreign");
 });
 
-test("classifyTarget: 多端口进程的注册归属判定与数组顺序无关", () => {
+test("classifyTarget: 已知实时项目归属不会被多端口 claim 覆盖", () => {
   const multi = proc({ ports: [3000, 3001] });
   const forward: RegistryEntry[] = [
     { name: "a", project: "/other", port: 3000, claimedAt: new Date().toISOString() },
     { name: "b", project: "/p/me", port: 3001, claimedAt: new Date().toISOString() },
   ];
-  assert.equal(classifyTarget(multi, "/p/me", forward), "own");
+  assert.equal(classifyTarget(multi, "/p/me", forward), "foreign");
   const reversed: RegistryEntry[] = [forward[1], forward[0]];
-  assert.equal(classifyTarget(multi, "/p/me", reversed), "own");
+  assert.equal(classifyTarget(multi, "/p/me", reversed), "foreign");
 });
 
 test("terminate: SIGTERM 即退 → term", async () => {
@@ -87,9 +90,32 @@ function stopFlagsOf(over: Partial<Flags>): Flags {
   return {
     json: false, all: false, force: false, gui: false, install: false,
     killDetached: false, restart: false, detach: false, follow: false,
+    showSensitiveCommand: false,
     positional: [], rest: [], ...over,
   };
 }
+
+test("stop: 旧 claim 的端口被其他项目占用时阻止误杀", async (t) => {
+  await withStateDir(async () => {
+    const ownProject = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-own-"));
+    const foreignProject = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-foreign-"));
+    t.after(() => fs.rm(ownProject, { recursive: true, force: true }));
+    t.after(() => fs.rm(foreignProject, { recursive: true, force: true }));
+
+    const registry = new Registry();
+    const { port } = await registry.claim({ name: "web", project: ownProject, prefer: 18844, claimedBy: "test" });
+    const foreign = spawn(
+      process.execPath,
+      ["-e", `require("http").createServer((_q,r)=>r.end("ok")).listen(${port},"127.0.0.1")`],
+      { cwd: foreignProject, stdio: "ignore" },
+    );
+    t.after(() => { if (foreign.exitCode === null) foreign.kill("SIGKILL"); });
+    await waitListening(port);
+
+    assert.equal(await stop(stopFlagsOf({ positional: ["web"], project: ownProject })), 3);
+    assert.equal(pidAlive(foreign.pid!), true);
+  });
+});
 
 async function withStateDir<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-stop-"));
@@ -139,7 +165,10 @@ test("stop: wrapper 组长本身不监听、孙进程才监听 → stop 对整�
       setInterval(() => {}, 1000);
     `;
     const leader = spawn(process.execPath, ["-e", leaderScript], {
-      cwd: project, detached: true, stdio: "ignore",
+      cwd: project,
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, PORTMARSHAL_SERVICE: "web" },
     });
     leader.unref();
     const leaderPid = leader.pid!;
@@ -191,7 +220,10 @@ test("stop: 组长已退出但原 PGID 仍有监听与非监听子进程 → 仍
       process.stdout.write(JSON.stringify({ listenerPid: listener.pid, idlePid: idle.pid }));
     `;
     const leader = spawn(process.execPath, ["-e", leaderScript], {
-      cwd: project, detached: true, stdio: ["ignore", "pipe", "ignore"],
+      cwd: project,
+      detached: true,
+      stdio: ["ignore", "pipe", "ignore"],
+      env: { ...process.env, PORTMARSHAL_SERVICE: "web" },
     });
     const leaderPid = leader.pid!;
     let childPidsJson = "";

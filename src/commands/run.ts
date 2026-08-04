@@ -1,6 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import type { Flags } from "../cli.js";
 import { EXIT } from "../types.js";
@@ -8,6 +9,7 @@ import { Registry, LockTimeoutError, defaultClaimedBy } from "../registry.js";
 import { projectOwnsPort, scanListeners, resolveProjectDir, displaySource } from "../scan.js";
 import { logFilePath, rotateLog, tailLines } from "../runlog.js";
 import { waitReady, terminateGroup } from "../ready.js";
+import { readProcessRunMarker } from "../runmarker.js";
 import stop from "./stop.js";
 
 const USAGE = "Usage: portmarshal run <name> [-d] [--wait-timeout N] [--ready-url PATH] [--prefer N] [--range A-B] [--project DIR] [--restart] -- <command...>\n";
@@ -68,7 +70,7 @@ export default async function run(flags: Flags): Promise<number> {
     port = await claimPort(registry, name, project, flags);
 
     // claim 重验证保证：端口仍在监听 ⇒ 监听者归属本项目（外人占用时 claim 已换新端口）
-    const running = (await scanListeners()).find((p) => p.ports.includes(port));
+    const running = (await scanListeners(undefined, undefined, !flags.showSensitiveCommand)).find((p) => p.ports.includes(port));
     if (running) {
       if (!flags.restart) {
         process.stderr.write(
@@ -131,10 +133,12 @@ async function runDetached(
   registry: Registry, flags: Flags,
 ): Promise<number> {
   const logFile = logFilePath(project, name);
+  const runId = crypto.randomUUID();
   let fd: Awaited<ReturnType<typeof fs.open>>;
   try {
     await rotateLog(logFile);
-    fd = await fs.open(logFile, "a");
+    fd = await fs.open(logFile, "a", 0o600);
+    await fs.chmod(logFile, 0o600);
   } catch (error) {
     process.stderr.write(`portmarshal: failed to prepare log file ${logFile}: ${(error as Error).message}\n`);
     await releaseClaim(registry, name, project);
@@ -149,7 +153,7 @@ async function runDetached(
       // cwd 必须钉在 project：detached 子进程没有终端 cwd 可继承参照，
       // 且 scan 的项目归属（restart 护栏、claim 复用校验）都按 cwd 匹配 project，不钉住会让旧实例识别不到自己。
       cwd: project,
-      env: { ...process.env, PORT: String(port), PORTMARSHAL_SERVICE: name },
+      env: { ...process.env, PORT: String(port), PORTMARSHAL_SERVICE: name, PORTMARSHAL_RUN_ID: runId },
     });
   } catch (error) {
     await fd.close().catch(() => {});
@@ -201,11 +205,16 @@ async function runDetached(
 
   let ready: Awaited<ReturnType<typeof waitReady>>;
   try {
-    await registry.setRunInfo(name, project, { runPid: child.pid, logFile });
+    await registry.setRunInfo(name, project, { runPid: child.pid, runId, logFile });
     ready = await waitReady({
       port, pid: child.pid, readyUrl: flags.readyUrl,
       timeoutMs: (flags.waitTimeout ?? 30) * 1000,
       signal: controller.signal,
+      verifyOwner: async () => {
+        const listener = (await scanListeners()).find((p) => p.ports.includes(port));
+        if (!listener || listener.pgid !== child.pid) return false;
+        return (await readProcessRunMarker(listener.pid)).runId === runId;
+      },
     });
   } catch (error) {
     process.stderr.write(`portmarshal: failed while tracking ${name}@${project}: ${(error as Error).message}\n`);
@@ -229,7 +238,11 @@ async function runDetached(
       await cleanupDetached(registry, name, project, child.pid);
       return 128 + (os.constants.signals[signal] ?? 1);
     }
-    const why = ready.reason === "died" ? "process exited before becoming ready" : "readiness wait timed out";
+    const why = ready.reason === "died"
+      ? "process exited before becoming ready"
+      : ready.reason === "foreign"
+        ? "the responding listener does not belong to this run"
+        : "readiness wait timed out";
     const tail = await tailLines(logFile, 20).catch(() => []);
     process.stderr.write(
       `portmarshal: ${name}@${project} failed to become ready on port ${port}: ${why}\n` +

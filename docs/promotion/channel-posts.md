@@ -26,10 +26,9 @@ PortMarshal 会扫描当前可见的 TCP listener，把端口关联到 PID、项
     portmarshal list
     portmarshal whois 3000
 
-需要配合 agent 时，可以先拿一个粘性的端口 claim：
+需要配合 agent 时，优先让 PortMarshal 管理完整生命周期：
 
-    PORT=$(portmarshal claim web --prefer 3000)
-    npm run dev -- --port "$PORT"
+    portmarshal run web --prefer 3000 -- npm run dev
 
 目前支持 macOS 和 Linux，MIT，运行时零 npm 依赖，也有 JSON 输出和可选的 SwiftBar 菜单栏视图。
 
@@ -59,10 +58,9 @@ The failure mode I wanted to fix was simple: one session sees port 3000 in use, 
     portmarshal list
     portmarshal whois 3000
 
-`portmarshal stop 3000` blocks the stop by default when the listener is attributed to another active project and prints the attribution. `--force` remains an explicit escape hatch. Cooperative sessions can also use a sticky claim:
+`portmarshal stop 3000` blocks the stop by default when the listener is attributed to another active project or its ownership cannot be safely verified, and prints the attribution. `--force` remains an explicit escape hatch. Cooperative sessions can use the managed lifecycle:
 
-    PORT=$(portmarshal claim web --prefer 3000)
-    npm run dev -- --port "$PORT"
+    portmarshal run web --prefer 3000 -- npm run dev
 
 Managed runtimes use their own control planes: published Docker ports resolve to the container, Compose service, and host project, while PM2 listeners resolve to `pm2:<app-name>` and the configured application cwd. Stops are delegated to `docker stop` or `pm2 stop` instead of signaling a shared backend or supervised child process.
 

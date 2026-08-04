@@ -11,7 +11,7 @@ cCursor Helper (Plugin)
 n127.0.0.1:63979
 `;
 
-/** ps -axo pid=,ppid=,comm= 样本：
+/** ps 表样本（解析器兼容旧 pid/ppid/comm fixture 与生产态新增的 pgid 列）：
  * 2755 为孤儿(ppid=1)；8660 父链 zsh(700)→Cursor(600)；31401 父链 →Cursor(600)；
  * 8123 父链 zsh(810)→Claude(800)；9123 父链 →Antigravity(900)；
  * 10123 父链 zsh(1010)→Terminal.app(1000)；11123 父链 →Docker(1100) */

@@ -11,7 +11,10 @@ export default async function watch(_flags: Flags): Promise<number> {
 
   if (!process.stdin.isTTY) {
     // 非交互环境没有退出路径（q 键不可用），渲染单帧快照后退出，避免死循环挂住调用方
-    const [scan, registry] = await Promise.all([scanListeners(), new Registry().load()]);
+    const [scan, registry] = await Promise.all([
+      scanListeners(undefined, undefined, !_flags.showSensitiveCommand),
+      new Registry().load(),
+    ]);
     const merged = mergeScanRegistry(scan.filter((p) => !isNoise(p.procName)), registry);
     process.stdout.write(formatWatchFrame(merged, prevPorts));
     process.stderr.write("watch needs an interactive terminal; rendered one snapshot and exited\n");
@@ -29,7 +32,10 @@ export default async function watch(_flags: Flags): Promise<number> {
 
   try {
     while (running) {
-      const [scan, registry] = await Promise.all([scanListeners(), new Registry().load()]);
+      const [scan, registry] = await Promise.all([
+        scanListeners(undefined, undefined, !_flags.showSensitiveCommand),
+        new Registry().load(),
+      ]);
       const merged = mergeScanRegistry(scan.filter((p) => !isNoise(p.procName)), registry);
       process.stdout.write("\x1b[2J\x1b[H" + formatWatchFrame(merged, prevPorts));
       prevPorts = new Set(merged.map((e) => e.port));

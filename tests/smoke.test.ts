@@ -47,7 +47,13 @@ before(async () => {
   // 用当前 node 自身起测试服务器，不依赖 CI 环境是否预装 python3
   server = spawn(
     process.execPath,
-    ["-e", `require("http").createServer((_q,r)=>r.end("ok")).listen(${PORT},"127.0.0.1")`],
+    [
+      "-e",
+      `require("http").createServer((_q,r)=>r.end("ok")).listen(${PORT},"127.0.0.1")`,
+      "--",
+      "--csrf_token",
+      "portmarshal-smoke-secret",
+    ],
     { cwd: projDir, stdio: "ignore" },
   );
   await waitListening(PORT);
@@ -58,12 +64,18 @@ after(async () => {
   await fs.rm(projDir, { recursive: true, force: true });
 });
 
-test("list --all --json 能归属到正确 cwd", async () => {
+test("list --all --json 能归属到正确 cwd 且默认脱敏；显式 flag 可查看原命令", async () => {
   const { stdout } = await cli(["list", "--all", "--json"]);
-  const entries = JSON.parse(stdout) as Array<{ port: number; proc?: { cwd: string } }>;
+  const entries = JSON.parse(stdout) as Array<{ port: number; proc?: { cwd: string; command: string } }>;
   const hit = entries.find((e) => e.port === PORT);
   assert.ok(hit, `端口 ${PORT} 应在扫描结果中`);
   assert.equal(await fs.realpath(hit!.proc!.cwd), await fs.realpath(projDir));
+  assert.equal(hit!.proc!.command.includes("portmarshal-smoke-secret"), false);
+  assert.match(hit!.proc!.command, /\[REDACTED\]/);
+
+  const raw = JSON.parse((await cli(["list", "--all", "--json", "--show-sensitive-command"])).stdout) as
+    Array<{ port: number; proc?: { command: string } }>;
+  assert.match(raw.find((e) => e.port === PORT)!.proc!.command, /portmarshal-smoke-secret/);
 });
 
 test("whois 未监听端口 exit=2", async () => {

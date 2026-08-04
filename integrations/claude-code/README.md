@@ -17,7 +17,7 @@ Claude Code 会在涉及「启动 dev server / 端口冲突 / 找服务」时自
 在全局或项目 CLAUDE.md 中追加：
 
 ```
-- 启动任何 dev server 前，先 `PORT=$(portmarshal claim <服务名> --prefer <默认端口>)` 获取端口
+- 用 `portmarshal run <服务名> --prefer <默认端口> -- <启动命令>` 启动 dev server；只在必须自行管理生命周期时才单独 `claim`
 - 找服务/怀疑端口冲突时，用 `portmarshal list --project . --json` 看本项目、`portmarshal whois <端口>` 查归属
-- 端口被占需要处置时用 `portmarshal stop <端口>`；退出码 3 表示是别人的活跃服务，向用户展示归属并请示，不要 --force
+- 端口被占需要处置时用 `portmarshal stop <端口>`；退出码 3 表示归属无法安全确认或是别人的活跃服务，向用户展示归属并请示，不要 --force
 ```

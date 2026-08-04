@@ -86,7 +86,7 @@ test("isNoise 覆盖更多噪声模式与正常进程", () => {
 
 const fakeExec: Exec = async (cmd, args) => {
   if (cmd === "lsof" && args.includes("-Fpcn")) return LSOF_FPCN;
-  if (cmd === "ps" && args.includes("pid=,ppid=,comm=")) return PS_TABLE;
+  if (cmd === "ps" && args.includes("pid=,ppid=,pgid=,comm=")) return PS_TABLE;
   if (cmd === "ps" && args.includes("pid=,command=")) return PS_COMMANDS;
   if (cmd === "launchctl") return LAUNCHCTL_LIST;
   if (cmd === "lsof" && args.includes("cwd")) {
@@ -170,7 +170,7 @@ test("scanListeners 将共享 Docker 后端 PID 按容器端口拆分并归属�
     if (cmd === "lsof" && args.includes("cwd")) {
       return "p777\nfcwd\nn/Users/w/Library/Containers/com.docker.docker/Data\n";
     }
-    if (cmd === "ps" && args.includes("pid=,ppid=,comm=")) {
+    if (cmd === "ps" && args.includes("pid=,ppid=,pgid=,comm=")) {
       return "777 1 /Applications/Docker.app/Contents/MacOS/com.docker.backend\n";
     }
     if (cmd === "ps" && args.includes("pid=,command=")) {
@@ -211,7 +211,7 @@ test("scanListeners 将 PM2 后代监听进程归属到应用名和 pm_cwd", asy
   const pm2Exec: Exec = async (cmd, args) => {
     if (cmd === "lsof" && args.includes("-Fpcn")) return "p15020\ncnode\nn127.0.0.1:3100\n";
     if (cmd === "lsof" && args.includes("cwd")) return "p15020\nfcwd\nn/\n";
-    if (cmd === "ps" && args.includes("pid=,ppid=,comm=")) {
+    if (cmd === "ps" && args.includes("pid=,ppid=,pgid=,comm=")) {
       return "1 0 /sbin/launchd\n15000 1 PM2 v7.0.3: God Daemon\n15010 15000 /usr/local/bin/node\n15020 15010 /usr/local/bin/node\n";
     }
     if (cmd === "ps" && args.includes("pid=,command=")) return "15020 node worker.js\n";

@@ -19,9 +19,12 @@ export function logFilePath(project: string, name: string): string {
 }
 
 export async function rotateLog(file: string): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
+  const dir = path.dirname(file);
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  await fs.chmod(dir, 0o700);
   try {
     await fs.rename(file, file + ".old");
+    await fs.chmod(file + ".old", 0o600);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }

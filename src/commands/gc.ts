@@ -24,7 +24,7 @@ export function gcCandidates(scan: ProcessInfo[], activeEntries: RegistryEntry[]
 
 export default async function gc(flags: Flags): Promise<number> {
   const registry = new Registry();
-  const scan = await scanListeners();
+  const scan = await scanListeners(undefined, undefined, !flags.showSensitiveCommand);
   const listening = new Set(scan.flatMap((p) => p.ports));
 
   const removed = await registry.gcStale(listening);

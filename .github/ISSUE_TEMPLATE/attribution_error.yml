@@ -13,7 +13,7 @@ body:
     attributes:
       label: PortMarshal version
       description: Run `portmarshal --version`.
-      placeholder: 0.3.2
+      placeholder: x.y.z
     validations:
       required: true
   - type: dropdown
@@ -43,7 +43,7 @@ body:
     id: whois-output
     attributes:
       label: PortMarshal output
-      description: Paste `portmarshal whois <port> --json`, with sensitive values redacted.
+      description: Paste `portmarshal whois <port> --json`; values are redacted by default. Never add `--show-sensitive-command` to issue output.
       render: json
     validations:
       required: true

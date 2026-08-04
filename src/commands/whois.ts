@@ -46,7 +46,7 @@ export default async function whois(flags: Flags): Promise<number> {
     process.stderr.write("Usage: portmarshal whois <port>\n");
     return EXIT.ERR;
   }
-  const infos = await scanListeners();
+  const infos = await scanListeners(undefined, undefined, !flags.showSensitiveCommand);
   const hit = infos.find((p) => p.ports.includes(port));
   if (!hit) {
     process.stderr.write(`Nothing is listening on port ${port}\n`);

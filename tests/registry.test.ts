@@ -24,6 +24,18 @@ test("claim 分配 prefer 端口并写入注册表", async () => {
   assert.equal(entries[0].project, "/proj/a");
 });
 
+test("registry 自动收紧已有 state 目录与文件权限", async () => {
+  const r = await tmpRegistry();
+  await fs.chmod(r.dir, 0o755);
+  await fs.writeFile(r.file, "[]\n", { mode: 0o644 });
+  await fs.chmod(r.file, 0o644);
+
+  await r.load();
+
+  assert.equal((await fs.stat(r.dir)).mode & 0o777, 0o700);
+  assert.equal((await fs.stat(r.file)).mode & 0o777, 0o600);
+});
+
 test("claim 幂等：同 (project,name) 重复 claim 返回原端口", async () => {
   const r = await tmpRegistry();
   await r.claim({ name: "web", project: "/proj/a", prefer: 3000, portFree: alwaysFree });
@@ -192,19 +204,21 @@ test("偷锁对无效 pid 文件走 mtime 宽限：内容为空且锁目录足�
   assert.equal(port, 3000);
 });
 
-test("setRunInfo 附加 runPid/logFile；release 清除 runPid 保留 logFile", async () => {
+test("setRunInfo 附加 runPid/runId/logFile；release 清除运行身份并保留 logFile", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pm-reg-run-"));
   const reg = new Registry(dir);
   await reg.claim({ name: "web", project: "/tmp/p", claimedBy: "test" });
-  await reg.setRunInfo("web", "/tmp/p", { runPid: 12345, logFile: "/tmp/p.log" });
+  await reg.setRunInfo("web", "/tmp/p", { runPid: 12345, runId: "uuid-1", logFile: "/tmp/p.log" });
   let e = (await reg.load())[0];
   assert.equal(e.runPid, 12345);
+  assert.equal(e.runId, "uuid-1");
   assert.equal(e.logFile, "/tmp/p.log");
 
   await reg.release("web", "/tmp/p");
   e = (await reg.load())[0];
   assert.equal(e.released, true);
   assert.equal(e.runPid, undefined);
+  assert.equal(e.runId, undefined);
   assert.equal(e.logFile, "/tmp/p.log");
   await fs.rm(dir, { recursive: true, force: true });
 });

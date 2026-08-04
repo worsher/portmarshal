@@ -33,6 +33,11 @@ test("parseFlags: -d/--detach 与 -f/--follow", () => {
   assert.equal(parseFlags([]).follow, false);
 });
 
+test("parseFlags: --show-sensitive-command 需要显式开启", () => {
+  assert.equal(parseFlags(["--show-sensitive-command"]).showSensitiveCommand, true);
+  assert.equal(parseFlags([]).showSensitiveCommand, false);
+});
+
 test("parseFlags: --wait-timeout 正整数校验", () => {
   assert.equal(parseFlags(["--wait-timeout", "45"]).waitTimeout, 45);
   assert.throws(() => parseFlags(["--wait-timeout", "0"]));

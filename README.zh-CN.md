@@ -43,7 +43,7 @@ npm install -g portmarshal
 | 命令 | 说明 |
 |---|---|
 | `portmarshal list [--json] [--all] [--project .]` | 显示监听服务的项目、来源和状态：正常、预留、未注册或漂移 |
-| `portmarshal whois <port> [--json]` | 查询端口的 PID、项目目录、完整命令和 Agent/服务来源 |
+| `portmarshal whois <port> [--json]` | 查询端口的 PID、项目目录、已脱敏命令和 Agent/服务来源 |
 | `portmarshal claim <name> [--prefer N] [--range A-B]` | 分配协作式粘性端口 claim；stdout 仅输出端口号 |
 | `portmarshal run <name> [--prefer N] [--restart] -- <command...>` | 预留端口并注入 `PORT` 和 `{port}`，前台监督子进程，退出自动释放 |
 | `portmarshal run -d <name> [--wait-timeout N] [--ready-url PATH] -- <command...>` | 同上，但转入后台：输出写入日志文件，服务就绪后立即返回 |
@@ -77,22 +77,23 @@ portmarshal run -d api --ready-url /health --wait-timeout 60 -- pnpm start
 portmarshal logs web -f
 ```
 
-`run -d` 会把子进程放进独立的进程组，将其 stdout/stderr 重定向到 `~/.portmarshal/logs/` 下的日志文件，服务就绪后立即把控制权交还调用方——不需要占用一个前台进程去盯着它。默认就绪判定是对预留端口做一次 TCP 连接，超时 30 秒；传入 `--ready-url /health` 可改为要求该路径返回 HTTP 2xx/3xx 响应，`--wait-timeout N` 可修改超时秒数。如果服务未能就绪（进程崩溃或等待超时），`run -d` 会打印日志最后 20 行，终止整个进程组，释放 claim，并以非零退出码结束——不会留下任何残留进程。在等待就绪期间收到 SIGINT、SIGTERM 或 SIGHUP 时，也会先完成进程组与 claim 清理，再按对应信号退出。成功时会打印一行 `ready`（含 pid 与日志路径）并以退出码 0 结束。
+`run -d` 会把子进程放进独立的进程组，将其 stdout/stderr 重定向到 `~/.portmarshal/logs/` 下的日志文件，服务就绪后立即把控制权交还调用方——不需要占用一个前台进程去盯着它。默认就绪判定是对预留端口做一次 TCP 连接，超时 30 秒；传入 `--ready-url /health` 可改为要求该路径返回 HTTP 2xx/3xx 响应，`--wait-timeout N` 可修改超时秒数。端点响应后还会核验监听进程携带本次运行的随机身份、且属于刚启动的进程组，避免其他进程抢先绑定端口时被误报为 ready。如果服务未能就绪（进程崩溃、等待超时或监听者不属于本次运行），`run -d` 会打印日志最后 20 行，只终止已验证的本次进程组，释放 claim，并以非零退出码结束。在等待就绪期间收到 SIGINT、SIGTERM 或 SIGHUP 时，也会先完成进程组与 claim 清理，再按对应信号退出。成功时会打印一行 `ready`（含 pid 与日志路径）并以退出码 0 结束。
 
-日志文件位于 `~/.portmarshal/logs/<hash8>-<name>.log`，`hash8` 由项目目录哈希而来，避免不同项目下同名服务互相冲突。每次 `run -d` 启动前会把上一次的日志轮转为 `<file>.log.old`，因此当前和上一次的日志都可查看；释放 claim 不会删除日志文件。用 `portmarshal logs <name|port>` 查看日志尾部（默认 50 行，`-n` 可调整），`-f` 可跨日志轮转持续跟随，`--json` 输出机器可读格式。
+日志文件位于 `~/.portmarshal/logs/<hash8>-<name>.log`，`hash8` 由项目目录哈希而来，避免不同项目下同名服务互相冲突。状态与日志目录权限为 `0700`，registry 和日志文件为 `0600`，只允许当前用户访问。每次 `run -d` 启动前会把上一次的日志轮转为 `<file>.log.old`，因此当前和上一次的日志都可查看；释放 claim 不会删除日志文件。用 `portmarshal logs <name|port>` 查看日志尾部（默认 50 行，`-n` 可调整），`-f` 可跨日志轮转持续跟随，`--json` 输出机器可读格式。
 
 由 `run -d` 启动的服务在 `list`、`whois`、`gc` 中归属显示为 `run:<name>`，并且不会出现在 `gc` 的脱离候选列表里——它们已经被托管了。`stop` 依然走正常的归属护栏。`run -d` 不会自动重启崩溃的进程：如果被托管的进程自行退出，`portmarshal list` 会把对应记录标记为 `dead`，直到再次 `run -d` 或释放该 claim。
 
 ## 归属与停止护栏
 
-PortMarshal 沿父进程链识别 `claude-code`、`cursor`、`antigravity`、`vscode/electron`、`terminal`、`docker` 和 `pm2`。PM2 托管的监听会通过 `pm2 jlist` 补全，来源显示为 `pm2:<应用名>`，项目使用应用配置的 cwd；完整 PM2 环境变量不会被保留。对于已发布到宿主机的 Docker 端口，它会读取运行中容器的元数据：把 Docker Desktop 的共享监听按容器拆分，来源显示为 `docker:<compose项目>/<服务>`，并从 Compose、Dev Container 或 bind mount 元数据恢复宿主机项目目录；受管运行时元数据不可用时会安全回退，不伪造归属。同时识别 macOS 的 `launchd:<label>` 与 Linux 的 `systemd:<unit>`。被重新挂到 PID 1、但无法识别受管服务的进程会标记为 `detached`——这是需要检查的信号，并不等于已经证明它是无主孤儿。
+PortMarshal 沿父进程链识别 `claude-code`、`cursor`、`antigravity`、`vscode/electron`、`terminal`、`docker` 和 `pm2`。PM2 托管的监听会通过 `pm2 jlist` 补全，来源显示为 `pm2:<应用名>`，项目使用应用配置的 cwd；完整 PM2 环境变量不会被保留。对于已发布到宿主机的 Docker 端口，它会读取运行中容器的元数据：把 Docker Desktop 的共享监听按容器拆分，来源显示为 `docker:<compose项目>/<服务>`，并从 Compose、Dev Container 或 bind mount 元数据恢复宿主机项目目录；受管运行时元数据不可用时会安全回退，不伪造归属。同时识别 macOS 的 `launchd:<label>` 与 Linux 的 `systemd:<unit>`。被重新挂到 PID 1、但无法识别受管服务的进程会标记为 `detached`——这是需要检查的信号，并不等于已经证明它是无主孤儿。命令输出默认会脱敏常见凭证 flag、赋值、Header、URL 用户信息和查询参数；仅在本机调试时才应显式使用 `--show-sensitive-command`，不要把原始输出贴进 issue 或 Agent 会话。
 
 | 目标 | `stop` 默认行为 |
 |---|---|
 | 属于调用方项目/claim 的 PM2 应用 | 执行 `pm2 stop <id>`，绝不直接终止会被 PM2 自动拉起的子进程 |
 | 属于调用方项目/claim 的 Docker 容器 | 对对应容器执行 `docker stop`，绝不向共享 Docker 后端发送信号 |
-| detached 服务，或属于调用方项目/claim 的服务 | SIGTERM；3 秒后仍存活则 SIGKILL |
-| 其他活跃服务 | 拦截，显示归属，返回退出码 3 |
+| 已验证属于调用方当前项目/claim 的服务 | SIGTERM；3 秒后仍存活则 SIGKILL |
+| 没有当前项目证据的 detached/未知归属服务 | 拦截，显示归属，返回退出码 3 |
+| 其他活跃服务，或与旧 claim 冲突的监听者 | 拦截，显示归属，返回退出码 3 |
 
 检查归属后可以用 `--force` 覆盖护栏；macOS 上的 `--gui` 会弹原生确认框。
 
@@ -105,7 +106,7 @@ PortMarshal 只能归属当前用户有权限读取进程元数据的监听。�
 ```text
 - 用 `portmarshal run <服务名> --prefer <默认端口> -- <命令>` 启动 dev server；自动注入 PORT/{port} 并退出时释放。只在必须自己管理进程时才用 `PORT=$(portmarshal claim ...)`。
 - 用 `portmarshal list --project . --json` 和 `portmarshal whois <端口> --json` 排查冲突。
-- 用 `portmarshal stop <端口>` 停止服务；退出码 3 表示属于其他活跃服务，应展示归属并在使用 --force 前询问用户。
+- 用 `portmarshal stop <端口>` 停止服务；退出码 3 表示无法安全确认归属或属于其他活跃服务，应展示归属并在使用 --force 前询问用户。
 ```
 
 可直接复制的 Claude Code skill 位于 [`integrations/claude-code/skills/portmarshal`](integrations/claude-code/skills/portmarshal)。

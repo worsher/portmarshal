@@ -5,6 +5,8 @@ import { EXIT } from "../types.js";
 import { scanListeners, classifyTarget, terminate, resolveProjectDir, displaySource } from "../scan.js";
 import { Registry } from "../registry.js";
 import { processGroupAlive, terminateGroup } from "../ready.js";
+import { readProcessRunMarker } from "../runmarker.js";
+import type { ProcessInfo, RegistryEntry } from "../types.js";
 
 function osascript(script: string): Promise<{ ok: boolean }> {
   return new Promise((resolve) => {
@@ -60,7 +62,7 @@ export default async function stop(flags: Flags): Promise<number> {
     return EXIT.ERR;
   }
 
-  const scan = await scanListeners();
+  const scan = await scanListeners(undefined, undefined, !flags.showSensitiveCommand);
   const proc = scan.find((p) => p.ports.includes(port));
   if (!proc) {
     process.stderr.write(`Nothing is listening on port ${port}\n`);
@@ -91,7 +93,7 @@ export default async function stop(flags: Flags): Promise<number> {
       : `pid ${proc.pid}`;
   const desc = `${port} (${displaySource(proc)} · ${resolveProjectDir(proc) ?? "?"} · ${identity})`;
 
-  if (kind === "foreign" && !flags.force) {
+  if (kind !== "own" && !flags.force) {
     if (flags.gui) {
       const proj = resolveProjectDir(proc) ?? "?";
       const dialogText = `"Port " & ${asStr(port)} & " is an active " & ${asStr(displaySource(proc))} & " service in " & ${asStr(proj)} & ". Stop it?"`;
@@ -104,7 +106,8 @@ export default async function stop(flags: Flags): Promise<number> {
       if (flags.json) {
         process.stdout.write(JSON.stringify({ blocked: true, ...info }) + "\n");
       } else {
-        process.stderr.write(`Blocked: ${desc} belongs to another active service\n  Command: ${proc.command}\n  Review the attribution, then add --force to stop it\n`);
+        const reason = kind === "detached" ? "has no verified current-project ownership" : "belongs to another active service";
+        process.stderr.write(`Blocked: ${desc} ${reason}\n  Command: ${proc.command}\n  Review the attribution, then add --force to stop it\n`);
       }
       return EXIT.BLOCKED;
     }
@@ -115,12 +118,20 @@ export default async function stop(flags: Flags): Promise<number> {
   // 此时 claim 即将转 released、runPid 会被清空，组长却还带着 PORTMARSHAL_SERVICE 环境变量残留，
   // 会被 gc 的 run:* 豁免误认成受管服务，永远进不了清理候选。这里先对整组发信号兜底。
   const runEntry = entries.find((e) => !e.released && e.port === port && e.runPid !== undefined);
+  const runIdentityMatches = runEntry ? await matchesRunIdentity(runEntry, proc) : false;
+  if (runEntry && !runIdentityMatches && !flags.force) {
+    process.stderr.write(
+      `Blocked: managed run identity mismatch for ${desc}; refusing to signal registry process group ${runEntry.runPid}\n` +
+      "  The claim may be stale or the PID/PGID may have been reused. Review the listener, then add --force to stop only the current target.\n",
+    );
+    return EXIT.BLOCKED;
+  }
 
   let how: "term" | "kill" | "gone" | "docker-stop" | "pm2-stop";
   try {
     // 组长可以在真正的监听进程启动后自行退出（daemon/wrapper 常见行为），
     // 但原 PGID 只要还有成员就仍然有效，因此不能用正 PID 存活与否决定是否跳过整组清理。
-    if (runEntry?.runPid !== undefined && processGroupAlive(runEntry.runPid)) {
+    if (runEntry?.runPid !== undefined && runIdentityMatches && processGroupAlive(runEntry.runPid)) {
       await terminateGroup(runEntry.runPid);
     }
     if (proc.pm2) {
@@ -147,4 +158,12 @@ export default async function stop(flags: Flags): Promise<number> {
   }
   if (flags.gui) notify(msg);
   return EXIT.OK;
+}
+
+async function matchesRunIdentity(entry: RegistryEntry, proc: ProcessInfo): Promise<boolean> {
+  if (entry.runPid === undefined || proc.pgid !== entry.runPid) return false;
+  const marker = await readProcessRunMarker(proc.pid);
+  if (entry.runId) return marker.runId === entry.runId;
+  // v0.6.0 compatibility: no random runId yet, so require all weaker signals together.
+  return marker.service === entry.name && classifyTarget(proc, entry.project, []) === "own";
 }

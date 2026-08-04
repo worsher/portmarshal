@@ -17,6 +17,7 @@ function flagsOf(over: Partial<Flags>): Flags {
   return {
     json: false, all: false, force: false, gui: false, install: false,
     killDetached: false, restart: false, detach: false, follow: false,
+    showSensitiveCommand: false,
     positional: [], rest: [], ...over,
   };
 }
@@ -191,6 +192,7 @@ test("run -d: 就绪后返回 0，registry 记录 runPid/logFile，服务继续�
     assert.equal(code, 0);
     const entry = (await loadEntries(stateDir))[0];
     assert.ok(entry.runPid && entry.runPid > 0);
+    assert.match(entry.runId ?? "", /^[0-9a-f-]{36}$/);
     assert.ok(entry.logFile);
     assert.equal(entry.released, undefined);
     t.after(() => { try { process.kill(-entry.runPid!, "SIGKILL"); } catch { /* 已退出 */ } });
@@ -199,6 +201,10 @@ test("run -d: 就绪后返回 0，registry 记录 runPid/logFile，服务继续�
     // 日志已落盘
     const log = await fs.readFile(entry.logFile!, "utf8");
     assert.match(log, /server up/);
+    assert.equal((await fs.stat(stateDir)).mode & 0o777, 0o700);
+    assert.equal((await fs.stat(path.join(stateDir, "logs"))).mode & 0o777, 0o700);
+    assert.equal((await fs.stat(path.join(stateDir, "registry.json"))).mode & 0o777, 0o600);
+    assert.equal((await fs.stat(entry.logFile!)).mode & 0o777, 0o600);
 
     // 真实 run -d 产出的 registry/logFile 可分别按 name 和 port 查询。
     const byName = await captureStdout(() => logs(flagsOf({
@@ -242,6 +248,28 @@ test("run -d: 日志初始化失败时不启动服务并立即 release claim", a
     } finally {
       await fs.rm(project, { recursive: true, force: true });
     }
+  });
+});
+
+test("run -d: registry runId 被篡改时 stop 阻止向旧 PGID 发信号", async (t) => {
+  await withStateDir(async (stateDir) => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-proj-"));
+    t.after(() => fs.rm(project, { recursive: true, force: true }));
+    assert.equal(await run(flagsOf({
+      positional: ["web"], project, prefer: 18837, detach: true,
+      rest: [process.execPath, "-e",
+        'require("http").createServer((_q,r)=>r.end("ok")).listen(process.env.PORT,"127.0.0.1")'],
+    })), 0);
+
+    const entries = await loadEntries(stateDir);
+    const entry = entries[0];
+    const pgid = entry.runPid!;
+    t.after(() => { try { process.kill(-pgid, "SIGKILL"); } catch { /* 已退出 */ } });
+    entries[0] = { ...entry, runId: "00000000-0000-4000-8000-000000000000" };
+    await fs.writeFile(path.join(stateDir, "registry.json"), JSON.stringify(entries, null, 2) + "\n");
+
+    assert.equal(await stop(flagsOf({ positional: [String(entry.port)], project })), 3);
+    assert.equal(processGroupAlive(pgid), true);
   });
 });
 
@@ -358,5 +386,6 @@ test("run -d: 日志轮转保留上一次运行", async (t) => {
     // 上一次的日志转到了 .old
     const old = await fs.readFile(entry.logFile! + ".old", "utf8");
     assert.match(old, /server up/);
+    assert.equal((await fs.stat(entry.logFile! + ".old")).mode & 0o777, 0o600);
   });
 });

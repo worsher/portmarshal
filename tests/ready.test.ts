@@ -22,6 +22,20 @@ test("waitReady: TCP 就绪即 ok", async () => {
   } finally { srv.close(); }
 });
 
+test("waitReady: 端口由其他进程提供时返回 foreign", async () => {
+  const srv = net.createServer();
+  const port = await listen(srv);
+  try {
+    const res = await waitReady({
+      port,
+      pid: process.pid,
+      timeoutMs: 3000,
+      verifyOwner: async () => false,
+    });
+    assert.deepEqual(res, { ok: false, reason: "foreign" });
+  } finally { srv.close(); }
+});
+
 test("waitReady: 无人监听 → timeout", async () => {
   // 用一个刚释放的临时端口，几乎不可能被瞬间抢占
   const srv = net.createServer();

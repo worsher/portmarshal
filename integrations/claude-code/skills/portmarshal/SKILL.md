@@ -35,8 +35,8 @@ portmarshal whois <端口> --json       # 这个端口是谁的：项目目录/�
 portmarshal stop <端口>
 ```
 
-- 退出码 0：已停止（detached 或本项目的服务）
-- **退出码 3：被拦截——这是其他 agent 的活跃服务。把归属信息展示给用户并请示，不要擅自 `--force`**
+- 退出码 0：已停止经当前项目/claim 验证的服务
+- **退出码 3：被拦截——归属无法安全确认，或这是其他 agent 的活跃服务。把归属信息展示给用户并请示，不要擅自 `--force`**
 - 退出码 2：端口无监听
 
 先用 `portmarshal gc` 查看 detached 候选；确认后才运行 `portmarshal gc --kill-detached`。

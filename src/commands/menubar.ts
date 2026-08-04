@@ -79,7 +79,10 @@ async function install(binPath: string): Promise<number> {
 export default async function menubar(flags: Flags): Promise<number> {
   const binPath = process.argv[1] ? await fs.realpath(process.argv[1]) : fileURLToPath(import.meta.url);
   if (flags.install) return install(binPath);
-  const [scan, registry] = await Promise.all([scanListeners(), new Registry().load()]);
+  const [scan, registry] = await Promise.all([
+    scanListeners(undefined, undefined, !flags.showSensitiveCommand),
+    new Registry().load(),
+  ]);
   const filtered = scan.filter((p) => !isNoise(p.procName));
   const merged = mergeScanRegistry(filtered, registry);
   process.stdout.write(renderMenubar(merged, binPath));

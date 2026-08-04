@@ -32,7 +32,7 @@ reports, not a one-day star count.
 
 - Repository: https://github.com/worsher/portmarshal
 - npm: https://www.npmjs.com/package/portmarshal
-- Latest launch-ready release: https://github.com/worsher/portmarshal/releases/tag/v0.3.4
+- Latest published release: https://github.com/worsher/portmarshal/releases/tag/v0.6.0
 - Install: `npm install -g portmarshal`
 - Platforms: macOS and Linux; Node.js 18.17 or newer
 - License: MIT

@@ -8,6 +8,7 @@ export interface Flags {
   restart: boolean;
   detach: boolean;
   follow: boolean;
+  showSensitiveCommand: boolean;
   waitTimeout?: number;
   readyUrl?: string;
   lines?: number;
@@ -23,7 +24,7 @@ export function parseFlags(args: string[]): Flags {
   const f: Flags = {
     json: false, all: false, force: false, gui: false,
     install: false, killDetached: false, restart: false,
-    detach: false, follow: false,
+    detach: false, follow: false, showSensitiveCommand: false,
     positional: [], rest: [],
   };
   for (let i = 0; i < args.length; i++) {
@@ -36,6 +37,7 @@ export function parseFlags(args: string[]): Flags {
       case "--json": f.json = true; break;
       case "--all": f.all = true; break;
       case "--force": f.force = true; break;
+      case "--show-sensitive-command": f.showSensitiveCommand = true; break;
       case "--gui": f.gui = true; break;
       case "--install": f.install = true; break;
       case "--kill-detached": f.killDetached = true; break;

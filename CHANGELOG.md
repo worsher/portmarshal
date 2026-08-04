@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1 — 2026-08-04
+
+- Redact common token, secret, password, authorization, cookie, URL-credential, and sensitive query-parameter values from scanned commands by default; add the explicit `--show-sensitive-command` debugging escape hatch
+- Tighten `~/.portmarshal` and log directories to mode `0700`, and registry, lock metadata, current logs, and rotated logs to `0600`; existing state permissions are repaired on access
+- Make live project attribution override stale cooperative claims so a reused port cannot turn another project's listener into an owned stop target
+- Guard detached or unattributed listeners by default unless current project attribution or a cooperative claim corroborates ownership
+- Bind `run -d` registry records to a random `runId` and process group; readiness now verifies that the responding listener belongs to the spawned run before reporting success
+- Verify `runId`/PGID before group termination, with a constrained service-marker compatibility path for v0.6.0 registry entries
+- Refresh Claude Code integration instructions, issue templates, and promotion metadata to match the current `run`-first workflow and v0.6.x release line
+
 ## 0.6.0 — 2026-07-31
 
 - Add `portmarshal run -d`: detached mode that captures stdout/stderr to `~/.portmarshal/logs/`, waits for TCP (or `--ready-url` HTTP) readiness before returning, and cleans up the claim and process group on failure

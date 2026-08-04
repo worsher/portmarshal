@@ -105,7 +105,7 @@ function pause(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-export type ReadyResult = { ok: true } | { ok: false; reason: "timeout" | "died" | "aborted" };
+export type ReadyResult = { ok: true } | { ok: false; reason: "timeout" | "died" | "aborted" | "foreign" };
 
 export async function waitReady(opts: {
   port: number;
@@ -114,6 +114,8 @@ export async function waitReady(opts: {
   timeoutMs: number;
   intervalMs?: number;
   signal?: AbortSignal;
+  /** endpoint 响应后验证监听者属于本次 run；防止 allocation-to-bind 竞态误报 ready */
+  verifyOwner?: () => Promise<boolean>;
 }): Promise<ReadyResult> {
   const host = "127.0.0.1";
   const interval = opts.intervalMs ?? 100;
@@ -126,6 +128,7 @@ export async function waitReady(opts: {
     // 先判就绪再判存活：双 fork 的服务组长会先退出，但监听已就绪就算成功
     if (tcpOk && (!opts.readyUrl || (await httpOnce(opts.port, opts.readyUrl, host, opts.signal)))) {
       if (opts.signal?.aborted) return { ok: false, reason: "aborted" };
+      if (opts.verifyOwner && !(await opts.verifyOwner())) return { ok: false, reason: "foreign" };
       return { ok: true };
     }
     if (opts.signal?.aborted) return { ok: false, reason: "aborted" };

@@ -7,6 +7,7 @@ export interface ListenEntry {
 export interface PsRow {
   pid: number;
   ppid: number;
+  pgid?: number;
   comm: string;
 }
 
@@ -29,6 +30,8 @@ export interface Pm2Info {
 
 export interface ProcessInfo {
   pid: number;
+  /** 进程组 id；用于验证 run -d 监听者确实属于受管进程组 */
+  pgid?: number;
   ports: number[];
   procName: string;
   command: string;
@@ -54,6 +57,8 @@ export interface RegistryEntry {
   lastPort?: number;
   /** run -d 托管的进程组长 pid；转 released 时清除 */
   runPid?: number;
+  /** run -d 随机实例标识；与监听进程环境交叉验证，防止 PID/PGID 复用误杀 */
+  runId?: string;
   /** run -d 日志文件绝对路径；release 后保留，供 logs 查上一次输出 */
   logFile?: string;
 }

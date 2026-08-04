@@ -11,6 +11,7 @@ function flagsOf(over: Partial<Flags>): Flags {
   return {
     json: false, all: false, force: false, gui: false, install: false,
     killDetached: false, restart: false, detach: false, follow: false,
+    showSensitiveCommand: false,
     positional: [], rest: [], ...over,
   };
 }

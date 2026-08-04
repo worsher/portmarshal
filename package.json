@@ -1,6 +1,6 @@
 {
   "name": "portmarshal",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "publishConfig": {
     "access": "public"
   },
@@ -43,7 +43,7 @@
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "pnpm build && pnpm test",
-    "test": "tsx --test tests/scan.test.ts tests/registry.test.ts tests/merge.test.ts tests/stop.test.ts tests/menubar.test.ts tests/render.test.ts tests/flags.test.ts tests/run.test.ts tests/runlog.test.ts tests/ready.test.ts tests/logs.test.ts tests/gc.test.ts",
+    "test": "tsx --test tests/scan.test.ts tests/registry.test.ts tests/merge.test.ts tests/stop.test.ts tests/menubar.test.ts tests/render.test.ts tests/flags.test.ts tests/redact.test.ts tests/run.test.ts tests/runmarker.test.ts tests/runlog.test.ts tests/ready.test.ts tests/logs.test.ts tests/gc.test.ts",
     "smoke": "pnpm build && tsx --test tests/smoke.test.ts"
   },
   "devDependencies": {

@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import type { DockerInfo, ListenEntry, Pm2Info, ProcessInfo, PsRow, RegistryEntry } from "./types.js";
 import { realExec, type Exec } from "./exec.js";
+import { redactCommand } from "./redact.js";
 
 export function parseLsofListeners(text: string): ListenEntry[] {
   const out: ListenEntry[] = [];
@@ -28,7 +29,13 @@ export function parsePsTable(text: string): Map<number, PsRow> {
     const m = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line);
     if (!m) continue;
     const pid = Number(m[1]);
-    map.set(pid, { pid, ppid: Number(m[2]), comm: m[3].trim() });
+    const tail = m[3].trim();
+    const withPgid = /^(\d+)\s+(.+)$/.exec(tail);
+    map.set(pid, {
+      pid,
+      ppid: Number(m[2]),
+      ...(withPgid ? { pgid: Number(withPgid[1]), comm: withPgid[2].trim() } : { comm: tail }),
+    });
   }
   return map;
 }
@@ -458,14 +465,18 @@ export function isNoise(procName: string): boolean {
   return NOISE.test(procName);
 }
 
-export async function scanListeners(exec: Exec = realExec, platform: NodeJS.Platform = process.platform): Promise<ProcessInfo[]> {
+export async function scanListeners(
+  exec: Exec = realExec,
+  platform: NodeJS.Platform = process.platform,
+  redactCommands = true,
+): Promise<ProcessInfo[]> {
   const linux = platform === "linux";
   // 固定次数并行调用拿全量数据（不随监听进程数增长）
   const [listenOut, psOut, psCmdOut, launchctlOut] = await Promise.all([
     linux
       ? exec("ss", ["-tlnp"])
       : exec("lsof", ["-iTCP", "-sTCP:LISTEN", "-P", "-n", "-Fpcn"]),
-    exec("ps", ["-axo", "pid=,ppid=,comm="]),
+    exec("ps", ["-axo", "pid=,ppid=,pgid=,comm="]),
     exec("ps", ["-axo", "pid=,command="]),
     linux ? Promise.resolve("") : exec("launchctl", ["list"]),
   ]);
@@ -498,9 +509,10 @@ export async function scanListeners(exec: Exec = realExec, platform: NodeJS.Plat
     const comm = table.get(pid)?.comm ?? "?";
     return {
       pid,
+      pgid: table.get(pid)?.pgid,
       ports: [...ports].sort((a, b) => a - b),
       procName: comm.split("/").pop() ?? "?",
-      command,
+      command: redactCommands ? redactCommand(command) : command,
       cwd: cwds.get(pid) ?? null,
       inferredProject: inferProjectFromCommand(command),
       source: traceSource(pid, table, managedServices),
@@ -606,17 +618,19 @@ export function classifyTarget(
   callerCwd: string,
   registry: RegistryEntry[],
 ): "detached" | "own" | "foreign" {
-  if (proc.source === "detached") return "detached";
   const normalizedCwd = realpathOrSelf(callerCwd);
-  const proj = resolveProjectDir(proc);
+  const resolved = resolveProjectDir(proc);
+  const proj = resolved && resolved !== path.parse(resolved).root ? realpathOrSelf(resolved) : null;
   if (proj && (proj === normalizedCwd || proj.startsWith(normalizedCwd + "/") || normalizedCwd.startsWith(proj + "/"))) {
     return "own";
   }
+  // 实时扫描已经给出另一个有效项目时，它比可能过期的 cooperative claim 更可信。
+  if (proj) return "foreign";
   const owned = registry.find(
     (r) => !r.released && proc.ports.includes(r.port) && realpathOrSelf(r.project) === normalizedCwd,
   );
   if (owned) return "own";
-  return "foreign";
+  return proc.source === "detached" ? "detached" : "foreign";
 }
 
 export async function terminate(

@@ -44,6 +44,20 @@ export class Registry {
       : undefined);
   }
 
+  private async ensurePrivateDir(): Promise<void> {
+    await fs.mkdir(this.dir, { recursive: true, mode: 0o700 });
+    await fs.chmod(this.dir, 0o700);
+  }
+
+  private async secureExistingState(): Promise<void> {
+    await fs.chmod(this.dir, 0o700).catch((e) => {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    });
+    await fs.chmod(this.file, 0o600).catch((e) => {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    });
+  }
+
   private async migrateLegacyRegistry(): Promise<void> {
     if (!this.legacyFile) return;
     try {
@@ -59,14 +73,17 @@ export class Registry {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
       throw e;
     }
-    await fs.mkdir(this.dir, { recursive: true });
+    await this.ensurePrivateDir();
     const tmp = `${this.file}.${process.pid}.migration.tmp`;
-    await fs.writeFile(tmp, raw);
+    await fs.writeFile(tmp, raw, { mode: 0o600 });
+    await fs.chmod(tmp, 0o600);
     await fs.rename(tmp, this.file);
+    await fs.chmod(this.file, 0o600);
     process.stderr.write(`portmarshal: migrated registry from ${this.legacyFile}\n`);
   }
 
   async load(): Promise<RegistryEntry[]> {
+    await this.secureExistingState();
     await this.migrateLegacyRegistry();
     let raw: string;
     try {
@@ -85,23 +102,24 @@ export class Registry {
   }
 
   private async save(entries: RegistryEntry[]): Promise<void> {
-    await fs.mkdir(this.dir, { recursive: true });
+    await this.ensurePrivateDir();
     const tmp = this.file + ".tmp";
-    await fs.writeFile(tmp, JSON.stringify(entries, null, 2) + "\n");
+    await fs.writeFile(tmp, JSON.stringify(entries, null, 2) + "\n", { mode: 0o600 });
+    await fs.chmod(tmp, 0o600);
     await fs.rename(tmp, this.file);
+    await fs.chmod(this.file, 0o600);
   }
 
   private async withLock<T>(fn: () => Promise<T>): Promise<T> {
     const lockDir = path.join(this.dir, ".lock");
     const pidFile = path.join(lockDir, "pid");
-    await fs.mkdir(this.dir, { recursive: true });
+    await this.ensurePrivateDir();
     const start = Date.now();
     for (;;) {
       try {
-        await fs.mkdir(lockDir);
-        await fs.writeFile(pidFile, String(process.pid));
-        break;
-      } catch {
+        await fs.mkdir(lockDir, { mode: 0o700 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         if (Date.now() - start > 2000) {
           const holderRaw = await fs.readFile(pidFile, "utf8").catch(() => null);
           const holder = holderRaw === null ? NaN : Number(holderRaw);
@@ -121,6 +139,16 @@ export class Registry {
           continue;
         }
         await new Promise((r) => setTimeout(r, 50));
+        continue;
+      }
+      try {
+        await fs.chmod(lockDir, 0o700);
+        await fs.writeFile(pidFile, String(process.pid), { mode: 0o600 });
+        await fs.chmod(pidFile, 0o600);
+        break;
+      } catch (error) {
+        await fs.rm(lockDir, { recursive: true, force: true });
+        throw error;
       }
     }
     try {
@@ -186,12 +214,12 @@ export class Registry {
     });
   }
 
-  async setRunInfo(name: string, project: string, info: { runPid: number; logFile: string }): Promise<void> {
+  async setRunInfo(name: string, project: string, info: { runPid: number; runId?: string; logFile: string }): Promise<void> {
     await this.withLock(async () => {
       const entries = await this.load();
       const idx = entries.findIndex((e) => e.project === project && e.name === name && !e.released);
       if (idx < 0) return;
-      entries[idx] = { ...entries[idx], runPid: info.runPid, logFile: info.logFile };
+      entries[idx] = { ...entries[idx], runPid: info.runPid, runId: info.runId, logFile: info.logFile };
       await this.save(entries);
     });
   }
@@ -202,7 +230,7 @@ export class Registry {
       const idx = entries.findIndex((e) => e.project === project && e.name === name && !e.released);
       if (idx < 0) return null;
       const e = entries[idx];
-      entries[idx] = { ...e, released: true, lastPort: e.port, runPid: undefined };
+      entries[idx] = { ...e, released: true, lastPort: e.port, runPid: undefined, runId: undefined };
       await this.save(entries);
       return e;
     });
@@ -215,7 +243,7 @@ export class Registry {
       for (let i = 0; i < entries.length; i++) {
         const e = entries[i];
         if (!e.released && e.port === port) {
-          entries[i] = { ...e, released: true, lastPort: e.port, runPid: undefined };
+          entries[i] = { ...e, released: true, lastPort: e.port, runPid: undefined, runId: undefined };
           changed = true;
         }
       }
@@ -234,7 +262,7 @@ export class Registry {
         const age = now - Date.parse(e.claimedAt);
         if (!listening && age > 30 * 60 * 1000) {
           removed.push(e);
-          return { ...e, released: true, lastPort: e.port, runPid: undefined };
+          return { ...e, released: true, lastPort: e.port, runPid: undefined, runId: undefined };
         }
         return e;
       });
