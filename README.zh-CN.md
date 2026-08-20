@@ -77,9 +77,9 @@ portmarshal run -d api --ready-url /health --wait-timeout 60 -- pnpm start
 portmarshal logs web -f
 ```
 
-`run -d` 会把子进程放进独立的进程组，将其 stdout/stderr 重定向到 `~/.portmarshal/logs/` 下的日志文件，服务就绪后立即把控制权交还调用方——不需要占用一个前台进程去盯着它。默认就绪判定是对预留端口做一次 TCP 连接，超时 30 秒；传入 `--ready-url /health` 可改为要求该路径返回 HTTP 2xx/3xx 响应，`--wait-timeout N` 可修改超时秒数。端点响应后还会核验监听进程携带本次运行的随机身份、且属于刚启动的进程组，避免其他进程抢先绑定端口时被误报为 ready。如果服务未能就绪（进程崩溃、等待超时或监听者不属于本次运行），`run -d` 会打印日志最后 20 行，只终止已验证的本次进程组，释放 claim，并以非零退出码结束。在等待就绪期间收到 SIGINT、SIGTERM 或 SIGHUP 时，也会先完成进程组与 claim 清理，再按对应信号退出。成功时会打印一行 `ready`（含 pid 与日志路径）并以退出码 0 结束。
+`run -d` 会把子进程放进独立的进程组，将其 stdout/stderr 重定向到 `~/.portmarshal/logs/` 下的日志文件，服务就绪后立即把控制权交还调用方——不需要占用一个前台进程去盯着它。默认就绪判定会通过 IPv4 或 IPv6 loopback 连接预留端口，超时 30 秒；传入 `--ready-url /health` 可改为要求该路径返回 HTTP 2xx/3xx 响应，`--wait-timeout N` 可修改超时秒数。端点响应后还会核验监听进程携带本次运行的随机身份、且属于刚启动的进程组，避免其他进程抢先绑定端口时被误报为 ready。如果服务未能就绪（进程崩溃、等待超时或监听者不属于本次运行），`run -d` 会打印日志最后 20 行，只终止已验证的本次进程组，释放 claim，并以非零退出码结束。在等待就绪期间收到 SIGINT、SIGTERM 或 SIGHUP 时，也会先完成进程组与 claim 清理，再按对应信号退出。成功时会打印一行 `ready`（含 pid 与日志路径）并以退出码 0 结束。
 
-日志文件位于 `~/.portmarshal/logs/<hash8>-<name>.log`，`hash8` 由项目目录哈希而来，避免不同项目下同名服务互相冲突。状态与日志目录权限为 `0700`，registry 和日志文件为 `0600`，只允许当前用户访问。每次 `run -d` 启动前会把上一次的日志轮转为 `<file>.log.old`，因此当前和上一次的日志都可查看；释放 claim 不会删除日志文件。用 `portmarshal logs <name|port>` 查看日志尾部（默认 50 行，`-n` 可调整），`-f` 可跨日志轮转持续跟随，`--json` 输出机器可读格式。
+日志文件位于 `~/.portmarshal/logs/<hash8>-<name>.log`，`hash8` 由项目目录哈希而来，避免不同项目下同名服务互相冲突；需要进行文件名清洗的服务名还会附加短哈希，避免不同原名折叠到同一文件。状态与日志目录权限为 `0700`，registry 和日志文件为 `0600`，只允许当前用户访问。每次 `run -d` 启动前会把上一次的日志轮转为 `<file>.log.old`，最多保留上一次运行最后 10 MiB；当前日志在本次运行退出或重启前仍可能继续增长。释放 claim 不会删除日志文件。用 `portmarshal logs <name|port>` 查看日志尾部（默认 50 行，`-n` 可调整，单次最多读取文件尾部 1 MiB），`-f` 可跨日志轮转持续跟随，`--json` 输出机器可读格式。
 
 由 `run -d` 启动的服务在 `list`、`whois`、`gc` 中归属显示为 `run:<name>`，并且不会出现在 `gc` 的脱离候选列表里——它们已经被托管了。`stop` 依然走正常的归属护栏。`run -d` 不会自动重启崩溃的进程：如果被托管的进程自行退出，`portmarshal list` 会把对应记录标记为 `dead`，直到再次 `run -d` 或释放该 claim。
 
@@ -119,8 +119,8 @@ pnpm smoke
 pnpm build
 ```
 
-GitHub Actions 会在 macOS 与 Linux 上执行构建、单测和真实监听端口冒烟测试；tag 发布通过 provenance 签名后推送到 npm。
+GitHub Actions 会使用 Node.js 22 与 24 在 macOS、Linux 上执行构建、单测和真实监听端口冒烟测试；tag 发布通过 provenance 签名后推送到 npm。
 
-设计文档：[`docs/specs/2026-07-16-portmarshal-design.md`](docs/specs/2026-07-16-portmarshal-design.md) · [更新记录](CHANGELOG.md)
+设计文档：[`docs/specs/2026-07-16-portmarshal-design.md`](docs/specs/2026-07-16-portmarshal-design.md) · [v0.6.2 可靠性规格](docs/specs/2026-08-20-v0.6.2-reliability.md) · [更新记录](CHANGELOG.md)
 
 macOS 与 Linux · Node.js ≥ 18.17 · 零运行时依赖 · MIT

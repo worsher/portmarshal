@@ -101,6 +101,8 @@ export default async function run(flags: Flags): Promise<number> {
     // （子进程不在终端的前台进程组里）；run 只承诺转发输出，不转发输入。
     stdio: ["ignore", "inherit", "inherit"],
     detached: true, // 子进程自成进程组：信号发给整组，覆盖 npm run dev 之下真正监听的孙进程
+    // 与 run -d 保持一致：--project 不只是 claim 的归属标签，也必须是命令的实际工作目录。
+    cwd: project,
     env: { ...process.env, PORT: String(port) },
   });
 

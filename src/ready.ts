@@ -117,16 +117,32 @@ export async function waitReady(opts: {
   /** endpoint 响应后验证监听者属于本次 run；防止 allocation-to-bind 竞态误报 ready */
   verifyOwner?: () => Promise<boolean>;
 }): Promise<ReadyResult> {
-  const host = "127.0.0.1";
+  // 与 registry 的空闲探测保持一致：dev server 可能只监听 IPv4 或只监听 IPv6 loopback。
+  const hosts = ["127.0.0.1", "::1"];
   const interval = opts.intervalMs ?? 100;
   const deadline = Date.now() + opts.timeoutMs;
-  let tcpOk = false;
+  const reachableHosts = new Set<string>();
   while (Date.now() < deadline) {
     if (opts.signal?.aborted) return { ok: false, reason: "aborted" };
-    if (!tcpOk) tcpOk = await tcpOnce(opts.port, host, opts.signal);
+    for (const host of hosts) {
+      if (!reachableHosts.has(host) && await tcpOnce(opts.port, host, opts.signal)) {
+        reachableHosts.add(host);
+      }
+      if (opts.signal?.aborted) return { ok: false, reason: "aborted" };
+    }
     if (opts.signal?.aborted) return { ok: false, reason: "aborted" };
     // 先判就绪再判存活：双 fork 的服务组长会先退出，但监听已就绪就算成功
-    if (tcpOk && (!opts.readyUrl || (await httpOnce(opts.port, opts.readyUrl, host, opts.signal)))) {
+    let endpointReady = reachableHosts.size > 0 && !opts.readyUrl;
+    if (opts.readyUrl) {
+      for (const host of reachableHosts) {
+        if (await httpOnce(opts.port, opts.readyUrl, host, opts.signal)) {
+          endpointReady = true;
+          break;
+        }
+        if (opts.signal?.aborted) return { ok: false, reason: "aborted" };
+      }
+    }
+    if (endpointReady) {
       if (opts.signal?.aborted) return { ok: false, reason: "aborted" };
       if (opts.verifyOwner && !(await opts.verifyOwner())) return { ok: false, reason: "foreign" };
       return { ok: true };

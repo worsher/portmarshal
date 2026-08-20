@@ -5,8 +5,8 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import { waitReady, pidAlive, processGroupAlive, terminateGroup } from "../src/ready.js";
 
-function listen(srv: net.Server | http.Server): Promise<number> {
-  return new Promise((r) => srv.listen(0, "127.0.0.1", () => r((srv.address() as net.AddressInfo).port)));
+function listen(srv: net.Server | http.Server, host = "127.0.0.1"): Promise<number> {
+  return new Promise((r) => srv.listen(0, host, () => r((srv.address() as net.AddressInfo).port)));
 }
 
 test("pidAlive: 自身存活，已收割的子进程 pid 不存活", () => {
@@ -19,6 +19,40 @@ test("waitReady: TCP 就绪即 ok", async () => {
   const port = await listen(srv);
   try {
     assert.deepEqual(await waitReady({ port, pid: process.pid, timeoutMs: 3000 }), { ok: true });
+  } finally { srv.close(); }
+});
+
+test("waitReady: 仅监听 IPv6 loopback 也能就绪", async (t) => {
+  const srv = net.createServer();
+  let port: number;
+  try {
+    port = await listen(srv, "::1");
+  } catch {
+    t.skip("此环境不支持 IPv6 (::1)");
+    return;
+  }
+  try {
+    assert.deepEqual(await waitReady({ port, pid: process.pid, timeoutMs: 3000 }), { ok: true });
+  } finally { srv.close(); }
+});
+
+test("waitReady: IPv6-only HTTP 健康检查也能就绪", async (t) => {
+  const srv = http.createServer((_req, res) => {
+    res.statusCode = 204;
+    res.end();
+  });
+  let port: number;
+  try {
+    port = await listen(srv, "::1");
+  } catch {
+    t.skip("此环境不支持 IPv6 (::1)");
+    return;
+  }
+  try {
+    assert.deepEqual(
+      await waitReady({ port, pid: process.pid, readyUrl: "/health", timeoutMs: 3000 }),
+      { ok: true },
+    );
   } finally { srv.close(); }
 });
 

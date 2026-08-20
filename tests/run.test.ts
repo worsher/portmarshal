@@ -81,6 +81,29 @@ test("run: 注入 PORT，子进程退出后自动 release 并保留 lastPort 粘
   });
 });
 
+test("run --project: 前台子进程在目标项目目录执行", async () => {
+  await withStateDir(async () => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-proj-"));
+    const output = path.join(os.tmpdir(), `portmarshal-cwd-${process.pid}-${Date.now()}.txt`);
+    try {
+      const code = await run(flagsOf({
+        positional: ["cwd-check"], project, prefer: 18824,
+        rest: [
+          process.execPath,
+          "-e",
+          'require("fs").writeFileSync(process.argv[1], process.cwd())',
+          output,
+        ],
+      }));
+      assert.equal(code, 0);
+      assert.equal(await fs.readFile(output, "utf8"), await fs.realpath(project));
+    } finally {
+      await fs.rm(output, { force: true });
+      await fs.rm(project, { recursive: true, force: true });
+    }
+  });
+});
+
 test("run: 透传子进程退出码，且异常退出同样 release", async () => {
   await withStateDir(async (stateDir) => {
     const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-proj-"));
@@ -119,6 +142,14 @@ function waitListening(port: number, timeoutMs = 5000): Promise<void> {
       });
     };
     tryOnce();
+  });
+}
+
+function supportsIPv6Loopback(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once("error", () => resolve(false));
+    srv.listen(0, "::1", () => srv.close(() => resolve(true)));
   });
 }
 
@@ -227,6 +258,28 @@ test("run -d: 就绪后返回 0，registry 记录 runPid/logFile，服务继续�
     assert.equal(released.runPid, undefined);
     assert.equal(released.logFile, entry.logFile);
     assert.match(await fs.readFile(released.logFile!, "utf8"), /server up/);
+  });
+});
+
+test("run -d: IPv6-only listener 通过就绪与身份核验", async (t) => {
+  if (!(await supportsIPv6Loopback())) {
+    t.skip("此环境不支持 IPv6 (::1)");
+    return;
+  }
+  await withStateDir(async (stateDir) => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-proj-"));
+    t.after(() => fs.rm(project, { recursive: true, force: true }));
+    const code = await run(flagsOf({
+      positional: ["ipv6"], project, prefer: 18838, detach: true,
+      rest: [process.execPath, "-e",
+        'require("http").createServer((_q,r)=>r.end("ok")).listen(process.env.PORT,"::1")'],
+    }));
+    assert.equal(code, 0);
+    const entry = (await loadEntries(stateDir))[0];
+    t.after(() => { try { process.kill(-entry.runPid!, "SIGKILL"); } catch { /* 已退出 */ } });
+    assert.equal(entry.port, 18838);
+    assert.ok(entry.runId);
+    assert.equal(await stop(flagsOf({ positional: [String(entry.port)], project })), 0);
   });
 });
 

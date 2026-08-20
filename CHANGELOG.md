@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.2 — 2026-08-20
+
+- Make foreground `run --project DIR` execute the child in `DIR`, matching the recorded project identity and detached behavior
+- Probe both IPv4 and IPv6 loopback during detached readiness checks, including HTTP health checks
+- Read log tails from the end with a bounded 1 MiB window instead of loading the entire file; cap the retained previous-run log at 10 MiB on rotation
+- Make sanitized detached-log filenames collision-resistant for service names containing spaces, separators, Unicode, or excessive length
+- Test the main workflow on Node.js 22 and 24 across both Ubuntu and macOS; use Node.js 22 for the publish workflow's Linux gate
+
 ## 0.6.1 — 2026-08-04
 
 - Redact common token, secret, password, authorization, cookie, URL-credential, and sensitive query-parameter values from scanned commands by default; add the explicit `--show-sensitive-command` debugging escape hatch
