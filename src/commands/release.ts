@@ -1,18 +1,34 @@
 import path from "node:path";
 import type { Flags } from "../cli.js";
 import { EXIT } from "../types.js";
-import { Registry } from "../registry.js";
+import { OwnerMismatchError, Registry } from "../registry.js";
 import { isPortFree } from "../registry.js";
+import { resolveOwnerIdentity } from "../owner.js";
 
 export default async function release(flags: Flags): Promise<number> {
   const name = flags.positional[0];
   if (!name) {
-    process.stderr.write("Usage: portmarshal release <name>\n");
+    process.stderr.write("Usage: portmarshal release <name> [--force]\n");
     return EXIT.ERR;
   }
   const project = path.resolve(flags.project ?? process.cwd());
   const registry = new Registry();
-  const entry = await registry.release(name, project);
+  let entry;
+  try {
+    entry = await registry.release(name, project, {
+      ownerKey: resolveOwnerIdentity()?.key,
+      force: flags.force,
+    });
+  } catch (error) {
+    if (error instanceof OwnerMismatchError) {
+      process.stderr.write(
+        `Blocked: ${error.message}\n` +
+        "  Review the claim, then add --force to release it without stopping its process.\n",
+      );
+      return EXIT.BLOCKED;
+    }
+    throw error;
+  }
   if (!entry) {
     process.stderr.write(`No active claim found for ${name}@${project}\n`);
     return EXIT.NOT_FOUND;

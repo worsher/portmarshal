@@ -53,6 +53,8 @@ export interface RegistryEntry {
   port: number;
   claimedAt: string; // ISO 8601
   claimedBy?: string;
+  /** Agent-session fingerprint. Raw session identifiers are never persisted. */
+  ownerKey?: string;
   released?: boolean;
   lastPort?: number;
   /** run -d 托管的进程组长 pid；转 released 时清除 */

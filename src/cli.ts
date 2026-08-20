@@ -14,7 +14,7 @@ Usage:
   portmarshal claim <name> [--prefer N] [--range A-B] [--json]
   portmarshal run <name> [-d] [--wait-timeout N] [--ready-url PATH] [--prefer N] [--range A-B] [--project DIR] [--restart] -- <command...>
   portmarshal logs <name|port> [--project DIR] [-f] [-n N] [--json]
-  portmarshal release <name>
+  portmarshal release <name> [--force]
   portmarshal stop <port|name> [--force|--gui] [--json] [--show-sensitive-command]
   portmarshal gc [--kill-detached]
   portmarshal watch

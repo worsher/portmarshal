@@ -617,20 +617,45 @@ export function classifyTarget(
   proc: ProcessInfo,
   callerCwd: string,
   registry: RegistryEntry[],
-): "detached" | "own" | "foreign" {
+  callerOwnerKey?: string,
+): "detached" | "own" | "foreign" | "session" {
   const normalizedCwd = realpathOrSelf(callerCwd);
   const resolved = resolveProjectDir(proc);
   const proj = resolved && resolved !== path.parse(resolved).root ? realpathOrSelf(resolved) : null;
   if (proj && (proj === normalizedCwd || proj.startsWith(normalizedCwd + "/") || normalizedCwd.startsWith(proj + "/"))) {
+    if (sessionOwnerConflict(proc, callerCwd, registry, callerOwnerKey)) return "session";
     return "own";
   }
   // 实时扫描已经给出另一个有效项目时，它比可能过期的 cooperative claim 更可信。
   if (proj) return "foreign";
+  const conflict = sessionOwnerConflict(proc, callerCwd, registry, callerOwnerKey);
+  if (conflict) return "session";
   const owned = registry.find(
     (r) => !r.released && proc.ports.includes(r.port) && realpathOrSelf(r.project) === normalizedCwd,
   );
   if (owned) return "own";
   return proc.source === "detached" ? "detached" : "foreign";
+}
+
+/** Active claim on this process that belongs to the same project but another session. */
+export function sessionOwnerConflict(
+  proc: ProcessInfo,
+  callerCwd: string,
+  registry: RegistryEntry[],
+  callerOwnerKey?: string,
+): RegistryEntry | null {
+  const normalizedCwd = realpathOrSelf(callerCwd);
+  return registry.find((r) => {
+    const project = realpathOrSelf(r.project);
+    const sameProjectTree = project === normalizedCwd
+      || project.startsWith(normalizedCwd + "/")
+      || normalizedCwd.startsWith(project + "/");
+    return !r.released
+      && Boolean(r.ownerKey)
+      && r.ownerKey !== callerOwnerKey
+      && proc.ports.includes(r.port)
+      && sameProjectTree;
+  }) ?? null;
 }
 
 export async function terminate(

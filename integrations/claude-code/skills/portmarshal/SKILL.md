@@ -17,6 +17,7 @@ portmarshal run <服务名> --prefer 5173 -- pnpm vite --port {port}
 ```
 
 - 退出码 3：同项目旧实例还在监听。想换掉它就加 `--restart`（走护栏 stop，不会误杀别人的服务）。
+- 若宿主已设置 `PORTMARSHAL_OWNER`，同一会话的所有命令必须原样继承；不要每条命令生成新值。未设置时按项目级护栏兼容运行。
 - 需要自己管理进程时才用 `PORT=$(portmarshal claim <服务名> --prefer <默认端口>)`。
 
 ## 查询与排查
@@ -36,7 +37,7 @@ portmarshal stop <端口>
 ```
 
 - 退出码 0：已停止经当前项目/claim 验证的服务
-- **退出码 3：被拦截——归属无法安全确认，或这是其他 agent 的活跃服务。把归属信息展示给用户并请示，不要擅自 `--force`**
+- **退出码 3：被拦截——归属无法安全确认、claim 属于另一个 Agent 会话，或这是其他 Agent 的活跃服务。把归属信息展示给用户并请示，不要擅自 `--force`**
 - 退出码 2：端口无监听
 
 先用 `portmarshal gc` 查看 detached 候选；确认后才运行 `portmarshal gc --kill-detached`。

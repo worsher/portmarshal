@@ -11,6 +11,7 @@ import type { Flags } from "../src/flags.js";
 import stop from "../src/commands/stop.js";
 import { Registry } from "../src/registry.js";
 import { pidAlive, processGroupAlive } from "../src/ready.js";
+import { ownerFingerprint } from "../src/owner.js";
 
 function proc(over: Partial<ProcessInfo>): ProcessInfo {
   return {
@@ -28,6 +29,17 @@ test("classifyTarget: detached 仍先按实时项目判断；未知归属才进�
 test("classifyTarget: cwd 同项目 → own", () => {
   assert.equal(classifyTarget(proc({ cwd: "/p/me" }), "/p/me", []), "own");
   assert.equal(classifyTarget(proc({ cwd: "/p/me/sub" }), "/p/me", []), "own");
+});
+
+test("classifyTarget: 同项目但活跃 claim 属于另一会话 → session", () => {
+  const reg: RegistryEntry[] = [{
+    name: "web", project: "/p/me", port: 3000,
+    claimedAt: new Date().toISOString(), claimedBy: "codex", ownerKey: "v1:owner-a",
+  }];
+  assert.equal(classifyTarget(proc({ cwd: "/p/me" }), "/p/me", reg, "v1:owner-a"), "own");
+  assert.equal(classifyTarget(proc({ cwd: "/p/me" }), "/p/me", reg, "v1:owner-b"), "session");
+  assert.equal(classifyTarget(proc({ cwd: "/p/me" }), "/p/me", reg), "session");
+  assert.equal(classifyTarget(proc({ cwd: "/p/me/sub" }), "/p/me/sub", reg, "v1:owner-b"), "session");
 });
 
 test("classifyTarget: 实时项目归属与旧 claim 冲突时以实时归属为准", () => {
@@ -114,6 +126,38 @@ test("stop: 旧 claim 的端口被其他项目占用时阻止误杀", async (t) 
 
     assert.equal(await stop(stopFlagsOf({ positional: ["web"], project: ownProject })), 3);
     assert.equal(pidAlive(foreign.pid!), true);
+  });
+});
+
+test("stop: 同项目服务被另一 agent session claim 时默认阻止，--force 才停止", async (t) => {
+  await withStateDir(async () => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-session-"));
+    t.after(() => fs.rm(project, { recursive: true, force: true }));
+    const registry = new Registry();
+    const { port } = await registry.claim({
+      name: "web", project, prefer: 18847, claimedBy: "codex",
+      ownerKey: ownerFingerprint("explicit", "agent-a"),
+    });
+    const service = spawn(
+      process.execPath,
+      ["-e", `require("http").createServer((_q,r)=>r.end("ok")).listen(${port},"127.0.0.1")`],
+      { cwd: project, stdio: "ignore" },
+    );
+    t.after(() => { if (service.exitCode === null) service.kill("SIGKILL"); });
+    await waitListening(port);
+
+    const previous = process.env.PORTMARSHAL_OWNER;
+    process.env.PORTMARSHAL_OWNER = "agent-b";
+    try {
+      assert.equal(await stop(stopFlagsOf({ positional: [String(port)], project })), 3);
+      assert.equal(pidAlive(service.pid!), true);
+      assert.equal(await stop(stopFlagsOf({ positional: [String(port)], project, force: true })), 0);
+      await waitUntil(() => !pidAlive(service.pid!), 3000);
+      assert.equal(pidAlive(service.pid!), false);
+    } finally {
+      if (previous === undefined) delete process.env.PORTMARSHAL_OWNER;
+      else process.env.PORTMARSHAL_OWNER = previous;
+    }
   });
 });
 

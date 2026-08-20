@@ -5,12 +5,13 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import type { Flags } from "../cli.js";
 import { EXIT } from "../types.js";
-import { Registry, LockTimeoutError, defaultClaimedBy } from "../registry.js";
+import { Registry, LockTimeoutError, OwnerMismatchError, defaultClaimedBy } from "../registry.js";
 import { projectOwnsPort, scanListeners, resolveProjectDir, displaySource } from "../scan.js";
 import { logFilePath, rotateLog, tailLines } from "../runlog.js";
 import { waitReady, terminateGroup } from "../ready.js";
 import { readProcessRunMarker } from "../runmarker.js";
 import stop from "./stop.js";
+import { resolveOwnerIdentity, type OwnerIdentity } from "../owner.js";
 
 const USAGE = "Usage: portmarshal run <name> [-d] [--wait-timeout N] [--ready-url PATH] [--prefer N] [--range A-B] [--project DIR] [--restart] -- <command...>\n";
 const FORWARDED = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
@@ -19,9 +20,14 @@ export function substitutePort(args: string[], port: number): string[] {
   return args.map((a) => a.split("{port}").join(String(port)));
 }
 
-async function releaseClaim(registry: Registry, name: string, project: string): Promise<boolean> {
+async function releaseClaim(
+  registry: Registry,
+  name: string,
+  project: string,
+  ownerKey?: string,
+): Promise<boolean> {
   try {
-    await registry.release(name, project);
+    await registry.release(name, project, { ownerKey });
     return true;
   } catch (error) {
     process.stderr.write(`portmarshal: failed to release claim: ${(error as Error).message}\n`);
@@ -34,6 +40,7 @@ async function cleanupDetached(
   name: string,
   project: string,
   pgid: number,
+  ownerKey?: string,
 ): Promise<boolean> {
   try {
     await terminateGroup(pgid);
@@ -42,15 +49,22 @@ async function cleanupDetached(
     process.stderr.write(`portmarshal: failed to stop process group ${pgid}: ${(error as Error).message}\n`);
     return false;
   }
-  return releaseClaim(registry, name, project);
+  return releaseClaim(registry, name, project, ownerKey);
 }
 
-async function claimPort(registry: Registry, name: string, project: string, flags: Flags): Promise<number> {
+async function claimPort(
+  registry: Registry,
+  name: string,
+  project: string,
+  flags: Flags,
+  owner: OwnerIdentity | null,
+): Promise<number> {
   const { port } = await registry.claim({
     name, project,
     prefer: flags.prefer,
     range: flags.range,
     claimedBy: defaultClaimedBy(),
+    ownerKey: owner?.key,
     portOwnedByProject: projectOwnsPort(project),
   });
   return port;
@@ -64,10 +78,11 @@ export default async function run(flags: Flags): Promise<number> {
   }
   const project = path.resolve(flags.project ?? process.cwd());
   const registry = new Registry();
+  const owner = resolveOwnerIdentity();
 
   let port: number;
   try {
-    port = await claimPort(registry, name, project, flags);
+    port = await claimPort(registry, name, project, flags, owner);
 
     // claim 重验证保证：端口仍在监听 ⇒ 监听者归属本项目（外人占用时 claim 已换新端口）
     const running = (await scanListeners(undefined, undefined, !flags.showSensitiveCommand)).find((p) => p.ports.includes(port));
@@ -83,18 +98,25 @@ export default async function run(flags: Flags): Promise<number> {
       const stopped = await stop({ ...flags, project, positional: [String(port)], rest: [], force: false, gui: false, json: false });
       if (stopped !== EXIT.OK) return stopped;
       // stop 已把记录转 released；重新 claim 依靠 lastPort 粘回同端口并恢复 active 记录
-      port = await claimPort(registry, name, project, flags);
+      port = await claimPort(registry, name, project, flags, owner);
     }
   } catch (e) {
     if (e instanceof LockTimeoutError) {
       process.stderr.write(`portmarshal: ${e.message}\n`);
       return EXIT.LOCK_TIMEOUT;
     }
+    if (e instanceof OwnerMismatchError) {
+      process.stderr.write(
+        `Blocked: ${e.message}\n` +
+        "  Reuse the same PORTMARSHAL_OWNER for an intentional handoff, or review the existing service before forcing a release/stop.\n",
+      );
+      return EXIT.BLOCKED;
+    }
     throw e;
   }
 
   const argv = substitutePort(flags.rest, port);
-  if (flags.detach) return runDetached(name, project, port, argv, registry, flags);
+  if (flags.detach) return runDetached(name, project, port, argv, registry, flags, owner?.key);
   process.stderr.write(`portmarshal: serving ${name}@${project} on port ${port}\n`);
   const child = spawn(argv[0], argv.slice(1), {
     // stdin 用 ignore 而非 inherit：detached 组内子进程若读控制终端会收到 SIGTTIN 而挂起
@@ -115,7 +137,7 @@ export default async function run(flags: Flags): Promise<number> {
     };
     const finish = (code: number) => {
       for (const sig of FORWARDED) process.removeListener(sig, forward);
-      void registry.release(name, project)
+      void registry.release(name, project, { ownerKey: owner?.key })
         .catch((e) => { process.stderr.write(`portmarshal: failed to release claim: ${(e as Error).message}\n`); })
         .then(() => resolve(code));
     };
@@ -133,6 +155,7 @@ export default async function run(flags: Flags): Promise<number> {
 async function runDetached(
   name: string, project: string, port: number, argv: string[],
   registry: Registry, flags: Flags,
+  ownerKey?: string,
 ): Promise<number> {
   const logFile = logFilePath(project, name);
   const runId = crypto.randomUUID();
@@ -143,7 +166,7 @@ async function runDetached(
     await fs.chmod(logFile, 0o600);
   } catch (error) {
     process.stderr.write(`portmarshal: failed to prepare log file ${logFile}: ${(error as Error).message}\n`);
-    await releaseClaim(registry, name, project);
+    await releaseClaim(registry, name, project, ownerKey);
     return EXIT.ERR;
   }
 
@@ -160,7 +183,7 @@ async function runDetached(
   } catch (error) {
     await fd.close().catch(() => {});
     process.stderr.write(`portmarshal: failed to start ${argv[0]}: ${(error as Error).message}\n`);
-    await releaseClaim(registry, name, project);
+    await releaseClaim(registry, name, project, ownerKey);
     return EXIT.ERR;
   }
 
@@ -197,9 +220,9 @@ async function runDetached(
       ?? (fdCloseErr ? `failed to close parent log descriptor: ${(fdCloseErr as Error).message}` : "no pid");
     process.stderr.write(`portmarshal: failed to start ${argv[0]}: ${detail}\n`);
     if (child.pid !== undefined) {
-      await cleanupDetached(registry, name, project, child.pid);
+      await cleanupDetached(registry, name, project, child.pid, ownerKey);
     } else {
-      await releaseClaim(registry, name, project);
+      await releaseClaim(registry, name, project, ownerKey);
     }
     return EXIT.ERR;
   }
@@ -220,7 +243,7 @@ async function runDetached(
     });
   } catch (error) {
     process.stderr.write(`portmarshal: failed while tracking ${name}@${project}: ${(error as Error).message}\n`);
-    await cleanupDetached(registry, name, project, child.pid);
+    await cleanupDetached(registry, name, project, child.pid, ownerKey);
     return EXIT.ERR;
   } finally {
     removeSignalHandlers();
@@ -229,7 +252,7 @@ async function runDetached(
   // waitReady 可能已准备返回成功，而信号恰好在 Promise 恢复到 finally 前到达；信号优先，仍执行整组清理。
   if (ready.ok && interruptedBy) {
     process.stderr.write(`portmarshal: interrupted by ${interruptedBy}; stopping ${name}@${project}\n`);
-    await cleanupDetached(registry, name, project, child.pid);
+    await cleanupDetached(registry, name, project, child.pid, ownerKey);
     return 128 + (os.constants.signals[interruptedBy] ?? 1);
   }
 
@@ -237,7 +260,7 @@ async function runDetached(
     if (ready.reason === "aborted") {
       const signal = interruptedBy ?? "SIGTERM";
       process.stderr.write(`portmarshal: interrupted by ${signal}; stopping ${name}@${project}\n`);
-      await cleanupDetached(registry, name, project, child.pid);
+      await cleanupDetached(registry, name, project, child.pid, ownerKey);
       return 128 + (os.constants.signals[signal] ?? 1);
     }
     const why = ready.reason === "died"
@@ -250,7 +273,7 @@ async function runDetached(
       `portmarshal: ${name}@${project} failed to become ready on port ${port}: ${why}\n` +
       (tail.length ? `--- last ${tail.length} log lines (${logFile}) ---\n${tail.join("\n")}\n` : ""),
     );
-    await cleanupDetached(registry, name, project, child.pid);
+    await cleanupDetached(registry, name, project, child.pid, ownerKey);
     return EXIT.ERR;
   }
   process.stderr.write(

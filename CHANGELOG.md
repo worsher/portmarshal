@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 — 2026-08-20
+
+- Bind cooperative `claim` and `run` records to an agent-session owner when `PORTMARSHAL_OWNER` or a Codex thread/session ID is available
+- Persist only a versioned SHA-256 fingerprint and non-sensitive source label; raw session identifiers are never stored or printed
+- Block another session from reusing the same active claim, releasing it, stopping its same-project listener, or replacing it with `run --restart`
+- Add explicit recovery paths through `release --force` and the existing guarded `stop --force`/`--gui` confirmation flow
+- Adopt legacy ownerless v0.6.x claims on their first safe reuse while preserving project-level behavior in environments without a stable session identity
+
 ## 0.6.2 — 2026-08-20
 
 - Make foreground `run --project DIR` execute the child in `DIR`, matching the recorded project identity and detached behavior

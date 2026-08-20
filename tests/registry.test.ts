@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
-import { Registry, isPortFree } from "../src/registry.js";
+import { OwnerMismatchError, Registry, isPortFree } from "../src/registry.js";
 
 async function tmpRegistry(): Promise<Registry> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-test-"));
@@ -42,6 +42,41 @@ test("claim 幂等：同 (project,name) 重复 claim 返回原端口", async () 
   const second = await r.claim({ name: "web", project: "/proj/a", prefer: 4000, portFree: alwaysFree });
   assert.equal(second.port, 3000);
   assert.equal(second.reused, true);
+});
+
+test("claim 会话所有权：同 owner 幂等，其他 owner 或无身份调用者被拦截", async () => {
+  const r = await tmpRegistry();
+  await r.claim({
+    name: "web", project: "/proj/a", prefer: 3000, portFree: alwaysFree,
+    claimedBy: "codex", ownerKey: "v1:owner-a",
+  });
+  const same = await r.claim({
+    name: "web", project: "/proj/a", portFree: alwaysFree,
+    claimedBy: "codex", ownerKey: "v1:owner-a",
+  });
+  assert.equal(same.reused, true);
+  await assert.rejects(
+    r.claim({ name: "web", project: "/proj/a", portFree: alwaysFree, ownerKey: "v1:owner-b" }),
+    OwnerMismatchError,
+  );
+  await assert.rejects(
+    r.claim({ name: "web", project: "/proj/a", portFree: alwaysFree }),
+    OwnerMismatchError,
+  );
+  assert.equal((await r.load())[0].ownerKey, "v1:owner-a");
+});
+
+test("claim 会话所有权：旧 ownerless claim 在安全复用时由已识别调用者接管", async () => {
+  const r = await tmpRegistry();
+  await r.claim({ name: "web", project: "/proj/a", prefer: 3000, portFree: alwaysFree });
+  const adopted = await r.claim({
+    name: "web", project: "/proj/a", portFree: alwaysFree,
+    claimedBy: "codex", ownerKey: "v1:owner-a",
+  });
+  assert.equal(adopted.reused, true);
+  const entry = (await r.load())[0];
+  assert.equal(entry.ownerKey, "v1:owner-a");
+  assert.equal(entry.claimedBy, "codex");
 });
 
 test("claim 幂等：端口正在被本项目监听时继续复用", async () => {
@@ -107,6 +142,24 @@ test("release 后再 claim 粘性复用 lastPort", async () => {
 test("release 不存在的记录返回 null", async () => {
   const r = await tmpRegistry();
   assert.equal(await r.release("nope", "/proj/a"), null);
+});
+
+test("release 会话所有权：其他 owner 被拦截，--force 语义可显式释放", async () => {
+  const r = await tmpRegistry();
+  await r.claim({
+    name: "web", project: "/proj/a", prefer: 3000, portFree: alwaysFree,
+    claimedBy: "codex", ownerKey: "v1:owner-a",
+  });
+  await assert.rejects(
+    r.release("web", "/proj/a", { ownerKey: "v1:owner-b" }),
+    OwnerMismatchError,
+  );
+  assert.equal((await r.load())[0].released, undefined);
+  const released = await r.release("web", "/proj/a", { ownerKey: "v1:owner-b", force: true });
+  assert.equal(released?.ownerKey, "v1:owner-a");
+  const saved = (await r.load())[0];
+  assert.equal(saved.released, true);
+  assert.equal(saved.ownerKey, undefined, "released 历史记录不保留可关联的 owner 指纹");
 });
 
 test("gcStale 回收超过 30 分钟未监听的记录并保留粘性", async () => {

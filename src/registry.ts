@@ -8,6 +8,19 @@ export class LockTimeoutError extends Error {
   constructor() { super("Registry lock timed out; retry the command"); }
 }
 
+export class OwnerMismatchError extends Error {
+  readonly action: "claim" | "release";
+  readonly entry: RegistryEntry;
+
+  constructor(action: "claim" | "release", entry: RegistryEntry) {
+    const actor = entry.claimedBy ? ` (${entry.claimedBy})` : "";
+    super(`${entry.name}@${entry.project} is owned by another agent session${actor}`);
+    this.name = "OwnerMismatchError";
+    this.action = action;
+    this.entry = entry;
+  }
+}
+
 function probeFree(port: number, host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const srv = net.createServer();
@@ -164,6 +177,7 @@ export class Registry {
     prefer?: number;
     range?: [number, number];
     claimedBy?: string;
+    ownerKey?: string;
     portFree?: (p: number) => Promise<boolean>;
     portOwnedByProject?: (p: number) => Promise<boolean>;
   }): Promise<{ port: number; reused: boolean; previousPort?: number }> {
@@ -174,13 +188,31 @@ export class Registry {
       const existing = entries.find(isKey);
 
       if (existing && !existing.released) {
+        // An owner-bound cooperative claim is a session lease. A caller without the
+        // matching fingerprint must not reuse or silently take it over.
+        if (existing.ownerKey && existing.ownerKey !== opts.ownerKey) {
+          throw new OwnerMismatchError("claim", existing);
+        }
         // 活跃记录也必须重新核验：端口可能在 30 分钟回收窗口内被外部进程抢占。
         // 若端口仍空闲，或扫描确认监听者仍属于本项目，才保持幂等复用。
         const stillFree = await free(existing.port);
         const stillOwned = !stillFree && opts.portOwnedByProject
           ? await opts.portOwnedByProject(existing.port)
           : false;
-        if (stillFree || stillOwned) return { port: existing.port, reused: true };
+        if (stillFree || stillOwned) {
+          // v0.6.x ownerless entries are adopted on the first safe reuse by an
+          // identified caller; no migration command or raw session ID is needed.
+          if (!existing.ownerKey && opts.ownerKey) {
+            const idx = entries.indexOf(existing);
+            entries[idx] = {
+              ...existing,
+              ownerKey: opts.ownerKey,
+              claimedBy: opts.claimedBy ?? existing.claimedBy,
+            };
+            await this.save(entries);
+          }
+          return { port: existing.port, reused: true };
+        }
       }
 
       const taken = new Set(entries.filter((e) => !e.released).map((e) => e.port));
@@ -204,6 +236,7 @@ export class Registry {
         port: chosen,
         claimedAt: new Date().toISOString(),
         claimedBy: opts.claimedBy,
+        ownerKey: opts.ownerKey,
       };
       await this.save([...entries.filter((e) => !isKey(e)), entry]);
       return {
@@ -224,13 +257,27 @@ export class Registry {
     });
   }
 
-  async release(name: string, project: string): Promise<RegistryEntry | null> {
+  async release(
+    name: string,
+    project: string,
+    opts: { ownerKey?: string; force?: boolean } = {},
+  ): Promise<RegistryEntry | null> {
     return this.withLock(async () => {
       const entries = await this.load();
       const idx = entries.findIndex((e) => e.project === project && e.name === name && !e.released);
       if (idx < 0) return null;
       const e = entries[idx];
-      entries[idx] = { ...e, released: true, lastPort: e.port, runPid: undefined, runId: undefined };
+      if (!opts.force && e.ownerKey && e.ownerKey !== opts.ownerKey) {
+        throw new OwnerMismatchError("release", e);
+      }
+      entries[idx] = {
+        ...e,
+        released: true,
+        lastPort: e.port,
+        ownerKey: undefined,
+        runPid: undefined,
+        runId: undefined,
+      };
       await this.save(entries);
       return e;
     });
@@ -243,7 +290,14 @@ export class Registry {
       for (let i = 0; i < entries.length; i++) {
         const e = entries[i];
         if (!e.released && e.port === port) {
-          entries[i] = { ...e, released: true, lastPort: e.port, runPid: undefined, runId: undefined };
+          entries[i] = {
+            ...e,
+            released: true,
+            lastPort: e.port,
+            ownerKey: undefined,
+            runPid: undefined,
+            runId: undefined,
+          };
           changed = true;
         }
       }
@@ -262,7 +316,14 @@ export class Registry {
         const age = now - Date.parse(e.claimedAt);
         if (!listening && age > 30 * 60 * 1000) {
           removed.push(e);
-          return { ...e, released: true, lastPort: e.port, runPid: undefined, runId: undefined };
+          return {
+            ...e,
+            released: true,
+            lastPort: e.port,
+            ownerKey: undefined,
+            runPid: undefined,
+            runId: undefined,
+          };
         }
         return e;
       });
@@ -272,6 +333,9 @@ export class Registry {
   }
 }
 
-export function defaultClaimedBy(): string {
-  return process.env.CLAUDECODE ? "claude-code" : (process.env.TERM_PROGRAM ?? "cli");
+export function defaultClaimedBy(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.CODEX_THREAD_ID?.trim() || env.CODEX_SESSION_ID?.trim()) return "codex";
+  if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT) return "claude-code";
+  if (env.CURSOR_AGENT) return "cursor";
+  return env.TERM_PROGRAM ?? "cli";
 }

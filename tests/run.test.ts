@@ -12,6 +12,7 @@ import stop from "../src/commands/stop.js";
 import type { RegistryEntry } from "../src/types.js";
 import { Registry } from "../src/registry.js";
 import { pidAlive, processGroupAlive } from "../src/ready.js";
+import { ownerFingerprint } from "../src/owner.js";
 
 function flagsOf(over: Partial<Flags>): Flags {
   return {
@@ -208,6 +209,42 @@ test("run --restart: 护栏停掉本项目旧实例后在同端口重启", async
     assert.ok(entry);
     assert.equal(entry.released, true);
     assert.equal(entry.lastPort, port);
+  });
+});
+
+test("run --restart: 另一 agent session 的同项目 claim 不会被接管或停止", async (t) => {
+  await withStateDir(async (stateDir) => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-session-"));
+    t.after(() => fs.rm(project, { recursive: true, force: true }));
+    const registry = new Registry();
+    const { port } = await registry.claim({
+      name: "web", project, prefer: 18825, claimedBy: "codex",
+      ownerKey: ownerFingerprint("explicit", "agent-a"),
+    });
+    const oldInstance = spawn(
+      process.execPath,
+      ["-e", `require("http").createServer((_q,r)=>r.end("ok")).listen(${port},"127.0.0.1")`],
+      { cwd: project, stdio: "ignore" },
+    );
+    t.after(() => { if (oldInstance.exitCode === null) oldInstance.kill("SIGKILL"); });
+    await waitListening(port);
+
+    const previous = process.env.PORTMARSHAL_OWNER;
+    process.env.PORTMARSHAL_OWNER = "agent-b";
+    try {
+      const code = await run(flagsOf({
+        positional: ["web"], project, restart: true,
+        rest: [process.execPath, "-e", "process.exit(0)"],
+      }));
+      assert.equal(code, 3);
+      assert.equal(pidAlive(oldInstance.pid!), true);
+      const entry = (await loadEntries(stateDir))[0];
+      assert.equal(entry.released, undefined);
+      assert.equal(entry.ownerKey, ownerFingerprint("explicit", "agent-a"));
+    } finally {
+      if (previous === undefined) delete process.env.PORTMARSHAL_OWNER;
+      else process.env.PORTMARSHAL_OWNER = previous;
+    }
   });
 });
 

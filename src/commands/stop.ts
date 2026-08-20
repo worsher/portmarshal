@@ -2,11 +2,12 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import type { Flags } from "../cli.js";
 import { EXIT } from "../types.js";
-import { scanListeners, classifyTarget, terminate, resolveProjectDir, displaySource } from "../scan.js";
+import { scanListeners, classifyTarget, terminate, resolveProjectDir, displaySource, sessionOwnerConflict } from "../scan.js";
 import { Registry } from "../registry.js";
 import { processGroupAlive, terminateGroup } from "../ready.js";
 import { readProcessRunMarker } from "../runmarker.js";
 import type { ProcessInfo, RegistryEntry } from "../types.js";
+import { resolveOwnerIdentity } from "../owner.js";
 
 function osascript(script: string): Promise<{ ok: boolean }> {
   return new Promise((resolve) => {
@@ -85,7 +86,11 @@ export default async function stop(flags: Flags): Promise<number> {
     return EXIT.BLOCKED;
   }
 
-  const kind = classifyTarget(proc, callerCwd, entries);
+  const owner = resolveOwnerIdentity();
+  const kind = classifyTarget(proc, callerCwd, entries, owner?.key);
+  const ownerConflict = kind === "session"
+    ? sessionOwnerConflict(proc, callerCwd, entries, owner?.key)
+    : null;
   const identity = proc.pm2
     ? `PM2 app ${proc.pm2.name} (#${proc.pm2.pmId})`
     : proc.docker
@@ -96,17 +101,30 @@ export default async function stop(flags: Flags): Promise<number> {
   if (kind !== "own" && !flags.force) {
     if (flags.gui) {
       const proj = resolveProjectDir(proc) ?? "?";
-      const dialogText = `"Port " & ${asStr(port)} & " is an active " & ${asStr(displaySource(proc))} & " service in " & ${asStr(proj)} & ". Stop it?"`;
+      const sessionWarning = kind === "session"
+        ? ` It is claimed by another agent session${ownerConflict?.claimedBy ? ` (${ownerConflict.claimedBy})` : ""}.`
+        : "";
+      const dialogText = asStr(
+        `Port ${port} is an active ${displaySource(proc)} service in ${proj}.${sessionWarning} Stop it?`,
+      );
       const { ok } = await osascript(
         `display dialog ${dialogText} with title "portmarshal" buttons {"Cancel","Stop"} default button "Cancel" cancel button "Cancel" with icon caution`,
       );
       if (!ok) return EXIT.OK; // 用户取消
     } else {
-      const info = { port, pid: proc.pid, source: displaySource(proc), project: resolveProjectDir(proc), command: proc.command, docker: proc.docker, pm2: proc.pm2 };
+      const info = {
+        port, pid: proc.pid, source: displaySource(proc), project: resolveProjectDir(proc),
+        command: proc.command, docker: proc.docker, pm2: proc.pm2,
+        guard: kind, claimedBy: ownerConflict?.claimedBy,
+      };
       if (flags.json) {
         process.stdout.write(JSON.stringify({ blocked: true, ...info }) + "\n");
       } else {
-        const reason = kind === "detached" ? "has no verified current-project ownership" : "belongs to another active service";
+        const reason = kind === "detached"
+          ? "has no verified current-project ownership"
+          : kind === "session"
+            ? `is claimed by another agent session${ownerConflict?.claimedBy ? ` (${ownerConflict.claimedBy})` : ""}`
+            : "belongs to another active service";
         process.stderr.write(`Blocked: ${desc} ${reason}\n  Command: ${proc.command}\n  Review the attribution, then add --force to stop it\n`);
       }
       return EXIT.BLOCKED;

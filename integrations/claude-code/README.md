@@ -18,6 +18,7 @@ Claude Code 会在涉及「启动 dev server / 端口冲突 / 找服务」时自
 
 ```
 - 用 `portmarshal run <服务名> --prefer <默认端口> -- <启动命令>` 启动 dev server；只在必须自行管理生命周期时才单独 `claim`
+- 如果环境已有 `PORTMARSHAL_OWNER`，同一会话的所有命令都原样继承，绝不为每条命令生成新值
 - 找服务/怀疑端口冲突时，用 `portmarshal list --project . --json` 看本项目、`portmarshal whois <端口>` 查归属
-- 端口被占需要处置时用 `portmarshal stop <端口>`；退出码 3 表示归属无法安全确认或是别人的活跃服务，向用户展示归属并请示，不要 --force
+- 端口被占需要处置时用 `portmarshal stop <端口>`；退出码 3 表示归属无法安全确认、claim 属于另一会话或是别人的活跃服务，向用户展示归属并请示，不要 --force
 ```

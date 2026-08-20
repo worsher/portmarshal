@@ -48,7 +48,7 @@ npm install -g portmarshal
 | `portmarshal run <name> [--prefer N] [--restart] -- <command...>` | 预留端口并注入 `PORT` 和 `{port}`，前台监督子进程，退出自动释放 |
 | `portmarshal run -d <name> [--wait-timeout N] [--ready-url PATH] -- <command...>` | 同上，但转入后台：输出写入日志文件，服务就绪后立即返回 |
 | `portmarshal logs <name\|port> [-n N] [-f] [--json]` | 查看或跟随 `run -d` 启动服务的日志 |
-| `portmarshal release <name>` | 释放 claim，不停止进程 |
+| `portmarshal release <name> [--force]` | 释放 claim，不停止进程；释放其他会话的 claim 前必须检查并显式使用 `--force` |
 | `portmarshal stop <port\|name> [--force\|--gui]` | 通过归属护栏停止服务 |
 | `portmarshal gc [--kill-detached]` | 回收过期 claim，查看或停止脱离会话的候选服务 |
 | `portmarshal watch` | 终端实时仪表盘，按 `q` 退出 |
@@ -87,11 +87,14 @@ portmarshal logs web -f
 
 PortMarshal 沿父进程链识别 `claude-code`、`cursor`、`antigravity`、`vscode/electron`、`terminal`、`docker` 和 `pm2`。PM2 托管的监听会通过 `pm2 jlist` 补全，来源显示为 `pm2:<应用名>`，项目使用应用配置的 cwd；完整 PM2 环境变量不会被保留。对于已发布到宿主机的 Docker 端口，它会读取运行中容器的元数据：把 Docker Desktop 的共享监听按容器拆分，来源显示为 `docker:<compose项目>/<服务>`，并从 Compose、Dev Container 或 bind mount 元数据恢复宿主机项目目录；受管运行时元数据不可用时会安全回退，不伪造归属。同时识别 macOS 的 `launchd:<label>` 与 Linux 的 `systemd:<unit>`。被重新挂到 PID 1、但无法识别受管服务的进程会标记为 `detached`——这是需要检查的信号，并不等于已经证明它是无主孤儿。命令输出默认会脱敏常见凭证 flag、赋值、Header、URL 用户信息和查询参数；仅在本机调试时才应显式使用 `--show-sensitive-command`，不要把原始输出贴进 issue 或 Agent 会话。
 
+协作式 claim 现在还会在可识别时绑定 Agent 会话所有者。`PORTMARSHAL_OWNER` 是跨工具的通用接入约定，Codex 的 thread/session ID 会被自动识别。该值应是同一会话所有 PortMarshal 命令共用的稳定、非敏感 ID，不要每条命令生成一个新值。PortMarshal 只保存单向 SHA-256 指纹，不会保存原始 ID。其他会话默认不能复用或释放该 claim，也不能停止它在同项目中的服务，或通过 `run --restart` 替换它。旧注册表和没有稳定会话标识的环境继续使用 v0.6 的项目级护栏；旧的无 owner claim 会在第一次安全复用时被当前会话接管。
+
 | 目标 | `stop` 默认行为 |
 |---|---|
 | 属于调用方项目/claim 的 PM2 应用 | 执行 `pm2 stop <id>`，绝不直接终止会被 PM2 自动拉起的子进程 |
 | 属于调用方项目/claim 的 Docker 容器 | 对对应容器执行 `docker stop`，绝不向共享 Docker 后端发送信号 |
 | 已验证属于调用方当前项目/claim 的服务 | SIGTERM；3 秒后仍存活则 SIGKILL |
+| 同项目、但 claim 属于另一个 Agent 会话的服务 | 拦截，显示 claim 来源，返回退出码 3 |
 | 没有当前项目证据的 detached/未知归属服务 | 拦截，显示归属，返回退出码 3 |
 | 其他活跃服务，或与旧 claim 冲突的监听者 | 拦截，显示归属，返回退出码 3 |
 
@@ -105,6 +108,7 @@ PortMarshal 只能归属当前用户有权限读取进程元数据的监听。�
 
 ```text
 - 用 `portmarshal run <服务名> --prefer <默认端口> -- <命令>` 启动 dev server；自动注入 PORT/{port} 并退出时释放。只在必须自己管理进程时才用 `PORT=$(portmarshal claim ...)`。
+- Agent 宿主没有可自动识别的会话 ID 时，让同一会话的所有命令继承一个稳定、非敏感的 `PORTMARSHAL_OWNER`；不要每条命令重新生成。
 - 用 `portmarshal list --project . --json` 和 `portmarshal whois <端口> --json` 排查冲突。
 - 用 `portmarshal stop <端口>` 停止服务；退出码 3 表示无法安全确认归属或属于其他活跃服务，应展示归属并在使用 --force 前询问用户。
 ```
@@ -121,6 +125,6 @@ pnpm build
 
 GitHub Actions 会使用 Node.js 22 与 24 在 macOS、Linux 上执行构建、单测和真实监听端口冒烟测试；tag 发布通过 provenance 签名后推送到 npm。
 
-设计文档：[`docs/specs/2026-07-16-portmarshal-design.md`](docs/specs/2026-07-16-portmarshal-design.md) · [v0.6.2 可靠性规格](docs/specs/2026-08-20-v0.6.2-reliability.md) · [更新记录](CHANGELOG.md)
+设计文档：[`docs/specs/2026-07-16-portmarshal-design.md`](docs/specs/2026-07-16-portmarshal-design.md) · [v0.7.0 Agent 会话所有权](docs/specs/2026-08-20-v0.7.0-agent-session-ownership.md) · [更新记录](CHANGELOG.md)
 
 macOS 与 Linux · Node.js ≥ 18.17 · 零运行时依赖 · MIT

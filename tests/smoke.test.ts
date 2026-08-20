@@ -32,7 +32,7 @@ function waitListening(port: number, timeoutMs = 5000): Promise<void> {
 async function cli(args: string[]): Promise<{ stdout: string; code: number }> {
   try {
     const { stdout } = await execFileP("node", [CLI, ...args], {
-      env: { ...process.env, PORTMARSHAL_STATE_DIR: stateDir },
+      env: { ...process.env, PORTMARSHAL_STATE_DIR: stateDir, PORTMARSHAL_OWNER: "smoke-session" },
     });
     return { stdout, code: 0 };
   } catch (e) {
@@ -87,6 +87,11 @@ test("claim 幂等返回同一端口且端口真实空闲", async () => {
   const { stdout: p1 } = await cli(["claim", "smoke-web", "--project", projDir, "--prefer", "18930"]);
   const { stdout: p2 } = await cli(["claim", "smoke-web", "--project", projDir]);
   assert.equal(p1.trim(), p2.trim());
+  const registryRaw = await fs.readFile(path.join(stateDir, "registry.json"), "utf8");
+  assert.equal(registryRaw.includes("smoke-session"), false, "registry 不得保存原始 owner 值");
+  const ownerEntry = (JSON.parse(registryRaw) as Array<{ name: string; ownerKey?: string }>)
+    .find((entry) => entry.name === "smoke-web");
+  assert.match(ownerEntry?.ownerKey ?? "", /^v1:[0-9a-f]{24}$/);
   const free = await new Promise<boolean>((resolve) => {
     const srv = net.createServer();
     srv.once("error", () => resolve(false));
@@ -165,7 +170,11 @@ test("run: SIGTERM 转发到进程组（含孙进程）并自动 release", async
     "node",
     [CLI, "run", "smoke-run", "--prefer", String(preferPort), "--project", projDir,
       "--", "sh", "-c", `"${process.execPath}" -e '${script}'`],
-    { cwd: projDir, env: { ...process.env, PORTMARSHAL_STATE_DIR: stateDir }, stdio: "ignore" },
+    {
+      cwd: projDir,
+      env: { ...process.env, PORTMARSHAL_STATE_DIR: stateDir, PORTMARSHAL_OWNER: "smoke-session" },
+      stdio: "ignore",
+    },
   );
   // 用注册表里真实分配的端口而非写死的 preferPort：若本机 18931 已被无关服务占用，
   // claim 会换新端口，此处必须跟着换，否则 waitListening 会误命中陌生服务，
