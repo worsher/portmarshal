@@ -11,6 +11,14 @@ export interface PsRow {
   comm: string;
 }
 
+export interface ProcessRef {
+  pid: number;
+  ppid: number;
+  pgid?: number;
+  procName: string;
+  command: string;
+}
+
 export interface DockerInfo {
   containerId: string;
   containerName: string;
@@ -30,6 +38,7 @@ export interface Pm2Info {
 
 export interface ProcessInfo {
   pid: number;
+  ppid?: number;
   /** 进程组 id；用于验证 run -d 监听者确实属于受管进程组 */
   pgid?: number;
   ports: number[];
@@ -45,6 +54,8 @@ export interface ProcessInfo {
   source: string; // "claude-code" | "cursor" | "antigravity" | "vscode/electron" | "terminal" | "docker" | "pm2" | "detached" | "?"
   /** detached 进程从环境变量残留追溯的启动者。仅展示用途，不参与 gc/stop 的状态判定 */
   origin?: string;
+  /** 与监听者同一 PGID 的父链，最近父进程在前；仅保留已脱敏命令。 */
+  ancestors?: ProcessRef[];
 }
 
 export interface RegistryEntry {
@@ -73,6 +84,41 @@ export interface MergedEntry {
   proc?: ProcessInfo;
   reg?: RegistryEntry;
   driftPeer?: number;
+}
+
+export type ServiceActivity = "active" | "reserved" | "dead";
+export type ServiceAttachment = "attached" | "detached" | "managed" | "none";
+export type ServiceConfidence = "verified" | "corroborated" | "inferred" | "unknown" | "conflict";
+export type ServiceClaimRelation = "current" | "reserved" | "related" | "drift" | "conflict";
+export type ServiceStopMode = "managed-run" | "docker" | "pm2" | "listener-only" | "blocked";
+
+export interface ServiceClaim {
+  relation: ServiceClaimRelation;
+  entry: RegistryEntry;
+}
+
+export interface ServiceInfo {
+  id: string;
+  name: string;
+  activity: ServiceActivity;
+  attachment: ServiceAttachment;
+  confidence: ServiceConfidence;
+  stopMode: ServiceStopMode;
+  project: string | null;
+  source: string;
+  origin?: string;
+  pgid?: number;
+  ports: number[];
+  listenerPids: number[];
+  wrapperPids: number[];
+  processes: ProcessInfo[];
+  claims: ServiceClaim[];
+  warnings: string[];
+}
+
+export interface ServiceSnapshot {
+  schemaVersion: 1;
+  services: ServiceInfo[];
 }
 
 export const EXIT = {

@@ -9,7 +9,7 @@ export type { Flags } from "./flags.js";
 const HELP = `portmarshal — agent-aware local port ownership and guarded orchestration
 
 Usage:
-  portmarshal list [--json] [--all] [--project <dir|.>] [--show-sensitive-command]
+  portmarshal list [--services] [--json] [--all] [--project <dir|.>] [--show-sensitive-command]
   portmarshal whois <port> [--json] [--show-sensitive-command]
   portmarshal claim <name> [--prefer N] [--range A-B] [--json]
   portmarshal run <name> [-d] [--wait-timeout N] [--ready-url PATH] [--prefer N] [--range A-B] [--project DIR] [--restart] -- <command...>
@@ -17,7 +17,7 @@ Usage:
   portmarshal release <name> [--force]
   portmarshal stop <port|name> [--force|--gui] [--json] [--show-sensitive-command]
   portmarshal gc [--dry-run|--kill-detached]
-  portmarshal watch
+  portmarshal watch [--services]
   portmarshal menubar [--install]
   portmarshal -v | --version
 `;

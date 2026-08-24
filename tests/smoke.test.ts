@@ -76,11 +76,35 @@ test("list --all --json 能归属到正确 cwd 且默认脱敏；显式 flag 可
   const raw = JSON.parse((await cli(["list", "--all", "--json", "--show-sensitive-command"])).stdout) as
     Array<{ port: number; proc?: { command: string } }>;
   assert.match(raw.find((e) => e.port === PORT)!.proc!.command, /portmarshal-smoke-secret/);
+
+  const snapshot = JSON.parse((await cli(["list", "--services", "--all", "--json"])).stdout) as {
+    schemaVersion: number;
+    services: Array<{ ports: number[]; listenerPids: number[]; project: string | null }>;
+  };
+  assert.equal(snapshot.schemaVersion, 1);
+  const service = snapshot.services.find((entry) => entry.ports.includes(PORT));
+  assert.ok(service);
+  assert.equal(await fs.realpath(service!.project!), await fs.realpath(projDir));
+  assert.deepEqual(service!.listenerPids, [server.pid]);
+  assert.equal(JSON.stringify(service).includes("portmarshal-smoke-secret"), false);
+  const rawSnapshot = JSON.parse((await cli([
+    "list", "--services", "--all", "--json", "--show-sensitive-command",
+  ])).stdout) as { services: unknown[] };
+  assert.equal(JSON.stringify(rawSnapshot.services).includes("portmarshal-smoke-secret"), true);
 });
 
 test("whois 未监听端口 exit=2", async () => {
   const { code } = await cli(["whois", "1"]);
   assert.equal(code, 2);
+});
+
+test("whois --json 附加 service 归属", async () => {
+  const { stdout, code } = await cli(["whois", String(PORT), "--json"]);
+  assert.equal(code, 0);
+  const result = JSON.parse(stdout) as { pid: number; service?: { ports: number[]; listenerPids: number[] } };
+  assert.equal(result.pid, server.pid);
+  assert.deepEqual(result.service?.ports, [PORT]);
+  assert.deepEqual(result.service?.listenerPids, [server.pid]);
 });
 
 test("claim 幂等返回同一端口且端口真实空闲", async () => {
@@ -112,6 +136,9 @@ test("stop --force 能停止服务并且端口释放", async () => {
 test("watch 非 TTY 输出单帧后退出而非死循环", async () => {
   const { code } = await cli(["watch"]);
   assert.equal(code, 0);
+  const serviceWatch = await cli(["watch", "--services"]);
+  assert.equal(serviceWatch.code, 0);
+  assert.match(serviceWatch.stdout, /watch --services/);
 });
 
 test("-v / --version 输出 semver 版本号", async () => {

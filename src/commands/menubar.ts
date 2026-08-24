@@ -3,45 +3,66 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Flags } from "../cli.js";
-import { EXIT, type MergedEntry } from "../types.js";
-import { scanListeners, isNoise, resolveProjectDir, displaySource } from "../scan.js";
-import { mergeScanRegistry } from "../merge.js";
+import { EXIT, type ServiceInfo } from "../types.js";
+import { scanListeners, isNoise } from "../scan.js";
 import { Registry } from "../registry.js";
+import { buildServiceSnapshot } from "../services.js";
 
 /** SwiftBar 元数据 value 不支持转义双引号，含双引号的路径去引号后再用（极罕见，仅防解析逃逸） */
 function safeParam(s: string): string {
   return s.replace(/"/g, "");
 }
 
-export function renderMenubar(entries: MergedEntry[], binPath: string): string {
-  const bad = entries.filter((e) => e.state === "drift" || e.proc?.source === "detached").length;
+export function renderMenubar(services: ServiceInfo[], binPath: string, version = "unknown"): string {
+  const bad = services.filter((service) => service.warnings.length > 0).length;
   const lines: string[] = [];
-  lines.push(bad > 0 ? `⚓${entries.length} ⚠${bad} | color=orange` : `⚓${entries.length}`);
+  lines.push(bad > 0 ? `⚓${services.length} ⚠${bad} | color=orange` : `⚓${services.length}`);
   lines.push("---");
-  if (entries.length === 0) {
+  if (services.length === 0) {
     lines.push("No listening development services | color=gray");
   }
-  for (const e of entries) {
-    const proj = e.proc ? resolveProjectDir(e.proc) : e.reg?.project;
-    const projName = proj ? path.basename(proj) : "?";
-    const src = e.proc ? displaySource(e.proc) : "reserved";
-    const isDetached = e.proc?.source === "detached";
-    const mark = e.state === "drift" ? "⚠ " : isDetached ? "⚠ " : "";
-    const suffix = isDetached || e.state === "drift" ? " | color=orange" : "";
-    const label = src; // displaySource 已渲染 detached 及其 env 溯源标签
+  for (const service of services) {
+    const projName = service.project ? path.basename(service.project) : service.name;
+    const ports = service.ports.map((port) => `:${port}`).join(",");
+    const source = service.origin ?? service.source;
+    const attachment = service.attachment === "detached" ? ` · ${source} · detached` : ` · ${source}`;
+    const warning = service.warnings.length > 0;
+    lines.push(`${warning ? "⚠ " : ""}${projName} · ${service.activity} · ${ports}${attachment}${warning ? " | color=orange" : ""}`);
 
-    lines.push(`${mark}${e.port} ${projName} · ${label}${suffix}`);
-    const stopLabel = e.proc && !isDetached && e.state !== "drift" ? `Stop service… (${src} is active)` : "Stop service";
-    if (e.proc) {
-      lines.push(`-- ${stopLabel} | bash="${safeParam(binPath)}" param1=stop param2=${e.port} param3=--gui terminal=false refresh=true`);
-      lines.push(`-- Copy http://localhost:${e.port} | bash=/bin/bash param1=-c param2="echo -n 'http://localhost:${e.port}' | pbcopy" terminal=false`);
+    if (service.listenerPids.length) {
+      lines.push(`-- Listener PID${service.listenerPids.length > 1 ? "s" : ""}: ${service.listenerPids.join(", ")} | color=gray`);
     }
-    if (proj) {
-      lines.push(`-- Open project in Finder | bash=/usr/bin/open param1="${safeParam(proj)}" terminal=false`);
+    if (service.wrapperPids.length) {
+      const pgid = service.pgid === undefined ? "" : ` · PGID ${service.pgid}`;
+      lines.push(`-- Wrapper PID${service.wrapperPids.length > 1 ? "s" : ""}: ${service.wrapperPids.join(", ")}${pgid} | color=gray`);
+    } else if (service.pgid !== undefined && service.listenerPids.length) {
+      lines.push(`-- PGID: ${service.pgid} | color=gray`);
+    }
+    for (const claim of service.claims) {
+      const prefix = claim.relation === "related" ? "Related claim" : "Claim";
+      lines.push(`-- ${prefix}: ${claim.entry.name} · :${claim.entry.port} · ${claim.relation}${claim.relation === "related" ? " · review" : ""} | color=gray`);
+    }
+
+    const primaryPort = service.ports[0];
+    if (service.activity === "active" && primaryPort !== undefined) {
+      const stopLabel = service.stopMode === "blocked"
+        ? "Review before stopping…"
+        : service.stopMode === "listener-only"
+          ? "Stop listener…"
+          : "Stop managed service…";
+      lines.push(`-- ${stopLabel} | bash="${safeParam(binPath)}" param1=stop param2=${primaryPort} param3=--gui terminal=false refresh=true`);
+      for (const port of service.ports) {
+        lines.push(`-- Copy http://localhost:${port} | bash=/bin/bash param1=-c param2="echo -n 'http://localhost:${port}' | pbcopy" terminal=false`);
+      }
+    }
+    if (service.project) {
+      lines.push(`-- Open project in Finder | bash=/usr/bin/open param1="${safeParam(service.project)}" terminal=false`);
     }
   }
   lines.push("---");
   lines.push(`Review stale claims and detached services… | bash="${safeParam(binPath)}" param1=gc param2=--dry-run terminal=true refresh=true`);
+  lines.push(`PortMarshal ${version} | color=gray`);
+  lines.push(`Executable: ${safeParam(binPath)} | color=gray`);
   lines.push("Refresh | refresh=true");
   return lines.join("\n") + "\n";
 }
@@ -84,7 +105,8 @@ export default async function menubar(flags: Flags): Promise<number> {
     new Registry().load(),
   ]);
   const filtered = scan.filter((p) => !isNoise(p.procName));
-  const merged = mergeScanRegistry(filtered, registry);
-  process.stdout.write(renderMenubar(merged, binPath));
+  const snapshot = buildServiceSnapshot(filtered, registry);
+  const pkg = JSON.parse(await fs.readFile(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
+  process.stdout.write(renderMenubar(snapshot.services, binPath, pkg.version));
   return EXIT.OK;
 }

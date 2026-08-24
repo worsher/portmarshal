@@ -9,6 +9,15 @@ import { readProcessRunMarker } from "../runmarker.js";
 import type { ProcessInfo, RegistryEntry } from "../types.js";
 import { resolveOwnerIdentity } from "../owner.js";
 
+export function listenersOnPort(scan: ProcessInfo[], port: number): ProcessInfo[] {
+  return scan.filter((proc) => proc.ports.includes(port));
+}
+
+export function portsNoLongerListening(affectedPorts: number[], scan: ProcessInfo[]): number[] {
+  const listening = new Set(scan.flatMap((proc) => proc.ports));
+  return affectedPorts.filter((port) => !listening.has(port));
+}
+
 function osascript(script: string): Promise<{ ok: boolean }> {
   return new Promise((resolve) => {
     execFile("osascript", ["-e", script], (err) => resolve({ ok: !err }));
@@ -64,7 +73,8 @@ export default async function stop(flags: Flags): Promise<number> {
   }
 
   const scan = await scanListeners(undefined, undefined, !flags.showSensitiveCommand);
-  const proc = scan.find((p) => p.ports.includes(port));
+  const sharedListeners = listenersOnPort(scan, port);
+  const proc = sharedListeners[0];
   if (!proc) {
     process.stderr.write(`Nothing is listening on port ${port}\n`);
     if (flags.gui) notify(`Nothing is listening on port ${port}`);
@@ -87,9 +97,13 @@ export default async function stop(flags: Flags): Promise<number> {
   }
 
   const owner = resolveOwnerIdentity();
-  const kind = classifyTarget(proc, callerCwd, entries, owner?.key);
+  const guarded = sharedListeners
+    .map((candidate) => ({ candidate, kind: classifyTarget(candidate, callerCwd, entries, owner?.key) }))
+    .find((item) => item.kind !== "own");
+  const kind = guarded?.kind ?? "own";
+  const guardProc = guarded?.candidate ?? proc;
   const ownerConflict = kind === "session"
-    ? sessionOwnerConflict(proc, callerCwd, entries, owner?.key)
+    ? sessionOwnerConflict(guardProc, callerCwd, entries, owner?.key)
     : null;
   const identity = proc.pm2
     ? `PM2 app ${proc.pm2.name} (#${proc.pm2.pmId})`
@@ -100,7 +114,7 @@ export default async function stop(flags: Flags): Promise<number> {
 
   if (kind !== "own" && !flags.force) {
     if (flags.gui) {
-      const proj = resolveProjectDir(proc) ?? "?";
+      const proj = resolveProjectDir(guardProc) ?? "?";
       const sessionWarning = kind === "session"
         ? ` It is claimed by another agent session${ownerConflict?.claimedBy ? ` (${ownerConflict.claimedBy})` : ""}.`
         : "";
@@ -145,6 +159,34 @@ export default async function stop(flags: Flags): Promise<number> {
     return EXIT.BLOCKED;
   }
 
+  const sharedUnmanaged = sharedListeners.length > 1
+    && !proc.pm2
+    && !proc.docker
+    && !(runEntry && runIdentityMatches);
+  if (sharedUnmanaged && !flags.force) {
+    const pids = sharedListeners.map((candidate) => candidate.pid).join(", ");
+    if (flags.gui) {
+      const { ok } = await osascript(
+        `display dialog ${asStr(`Port ${port} is shared by listener PIDs ${pids}. Stop every visible listener on this port?`)} with title "portmarshal" buttons {"Cancel","Stop listeners"} default button "Cancel" cancel button "Cancel" with icon caution`,
+      );
+      if (!ok) return EXIT.OK;
+    } else {
+      process.stderr.write(
+        `Blocked: port ${port} is shared by listener PIDs ${pids}; refusing to stop only one and release the shared claim\n` +
+        "  Review every listener, then add --force to stop all visible listeners on this port\n",
+      );
+      return EXIT.BLOCKED;
+    }
+  }
+
+  const affectedListeners = proc.pm2
+    ? scan.filter((candidate) => candidate.pm2?.pmId === proc.pm2?.pmId)
+    : proc.docker
+      ? scan.filter((candidate) => candidate.docker?.containerId === proc.docker?.containerId)
+      : runEntry && runIdentityMatches
+        ? scan.filter((candidate) => candidate.pgid === runEntry.runPid)
+        : sharedUnmanaged ? sharedListeners : [proc];
+
   let how: "term" | "kill" | "gone" | "docker-stop" | "pm2-stop";
   try {
     // 组长可以在真正的监听进程启动后自行退出（daemon/wrapper 常见行为），
@@ -159,18 +201,37 @@ export default async function stop(flags: Flags): Promise<number> {
       await stopDockerContainer(proc.docker.containerId);
       how = "docker-stop";
     } else {
-      how = await terminate(proc.pid);
+      const outcomes = [];
+      for (const candidate of affectedListeners) {
+        outcomes.push(await terminate(candidate.pid));
+      }
+      how = outcomes.includes("kill") ? "kill" : outcomes.every((outcome) => outcome === "gone") ? "gone" : "term";
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     process.stderr.write(`Failed to stop ${desc}: ${detail}\n`);
     return EXIT.ERR;
   }
-  // 进程可能监听多个端口，全部预留记录一并清理
-  for (const p of proc.ports) await registry.markReleasedByPort(p);
-  const msg = how === "gone" ? "Process was already gone; cleared its claim" : `Stopped ${desc}${how === "kill" ? " (SIGKILL)" : ""}`;
+  // 共享 socket 可能由 wrapper 立即拉起新 listener。只有复扫确认不再监听的端口才能释放 claim。
+  const affectedPorts = [...new Set(affectedListeners.flatMap((candidate) => candidate.ports))];
+  const afterScan = await scanListeners(undefined, undefined, !flags.showSensitiveCommand);
+  const releasedPorts = portsNoLongerListening(affectedPorts, afterScan);
+  for (const releasedPort of releasedPorts) await registry.markReleasedByPort(releasedPort);
+  const releasedSet = new Set(releasedPorts);
+  const stillListening = affectedPorts.filter((affectedPort) => !releasedSet.has(affectedPort));
+  const baseMsg = how === "gone" ? "Process was already gone" : `Stopped ${desc}${how === "kill" ? " (SIGKILL)" : ""}`;
+  const msg = stillListening.length
+    ? `${baseMsg}; port(s) ${stillListening.join(", ")} are still listening, so their claims were preserved`
+    : how === "gone" ? `${baseMsg}; cleared its claim` : baseMsg;
   if (flags.json) {
-    process.stdout.write(JSON.stringify({ stopped: true, port, pid: proc.pid, how }) + "\n");
+    process.stdout.write(JSON.stringify({
+      stopped: true,
+      port,
+      pid: proc.pid,
+      pids: affectedListeners.map((candidate) => candidate.pid),
+      how,
+      remainingPorts: stillListening,
+    }) + "\n");
   } else {
     process.stderr.write(msg + "\n");
   }

@@ -42,7 +42,7 @@ export function formatTable(header: string[], rows: string[][]): string {
   return [fmt(header), ...rows.map(fmt)].join("\n");
 }
 
-import type { MergedEntry } from "./types.js";
+import type { MergedEntry, ServiceInfo } from "./types.js";
 import { displaySource, resolveProjectDir } from "./scan.js";
 import { isDeadRun } from "./merge.js";
 
@@ -73,6 +73,33 @@ export function formatWatchFrame(cur: MergedEntry[], prevPorts: Set<number>): st
   return (
     `portmarshal watch  ${C.dim}${now}  press q to quit${C.reset}\n\n` +
     formatTable(["PORT", "STATE", "SOURCE", "CLAIM", "PROJECT", ""], rows) +
+    "\n"
+  );
+}
+
+export function formatServiceWatchFrame(cur: ServiceInfo[], prevIds: Set<string>): string {
+  const rows = cur.map((service) => {
+    const isNew = !prevIds.has(service.id);
+    const warning = service.warnings.length > 0;
+    const color = isNew ? C.green : warning ? C.yellow : "";
+    const end = color ? C.reset : "";
+    return [
+      `${color}${service.name}${end}`,
+      service.activity === "active"
+        ? `${C.green}●${C.reset}`
+        : service.activity === "dead" ? `${C.red}●${C.reset}` : "◐",
+      service.ports.join(","),
+      service.listenerPids.join(",") || "-",
+      service.origin ?? service.source,
+      service.claims.map((claim) => `${claim.entry.port}:${claim.relation}`).join(",") || "-",
+      `${color}${service.project ?? "?"}${end}`,
+      service.warnings.join(","),
+    ];
+  });
+  const now = new Date().toLocaleTimeString("en-US", { hour12: false });
+  return (
+    `portmarshal watch --services  ${C.dim}${now}  press q to quit${C.reset}\n\n` +
+    formatTable(["SERVICE", "STATE", "PORTS", "PIDS", "SOURCE", "CLAIMS", "PROJECT", ""], rows) +
     "\n"
   );
 }

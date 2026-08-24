@@ -52,8 +52,8 @@ On first use, PortMarshal copies an existing `~/.portscout/registry.json` into `
 
 | Command | What it does |
 |---|---|
-| `portmarshal list [--json] [--all] [--project .]` | List listeners with project, source, and state: active, reserved, unregistered, or drift |
-| `portmarshal whois <port> [--json]` | Inspect one port: PID, project directory, redacted command, agent or service source |
+| `portmarshal list [--services] [--json] [--all] [--project .]` | List per-port state, or aggregate process trees, ports, and claims into services |
+| `portmarshal whois <port> [--json]` | Inspect one port plus its service listeners, wrappers, PGID, claims, and stop plan |
 | `portmarshal claim <name> [--prefer N] [--range A-B]` | Allocate a cooperative sticky port claim; stdout contains only the port number |
 | `portmarshal run <name> [--prefer N] [--restart] -- <command...>` | Claim a port, inject it as `PORT` and `{port}`, supervise the command in the foreground, auto-release on exit |
 | `portmarshal run -d <name> [--wait-timeout N] [--ready-url PATH] -- <command...>` | Same as above, but detached: captures output to a log file and returns once the service is ready |
@@ -61,8 +61,8 @@ On first use, PortMarshal copies an existing `~/.portscout/registry.json` into `
 | `portmarshal release <name> [--force]` | Release a claim without stopping its process; another session's claim requires explicit review and `--force` |
 | `portmarshal stop <port\|name> [--force\|--gui]` | Stop a service behind the ownership guard |
 | `portmarshal gc [--dry-run\|--kill-detached]` | Preview cleanup, reap stale claims, or stop detached service candidates |
-| `portmarshal watch` | Refreshing terminal dashboard; press `q` to quit |
-| `portmarshal menubar [--install]` | SwiftBar menu with guarded click-to-stop actions |
+| `portmarshal watch [--services]` | Refreshing port or service dashboard; press `q` to quit |
+| `portmarshal menubar [--install]` | Service-grouped SwiftBar menu with guarded click-to-stop actions |
 
 Typical agent startup:
 
@@ -94,6 +94,18 @@ Log files live at `~/.portmarshal/logs/<hash8>-<name>.log`, keyed by a hash of t
 Services started with `run -d` are attributed as `run:<name>` in `list`, `whois`, and `gc`, and are exempt from `gc`'s detached-service candidates — they're already managed. `stop` still applies the normal ownership guard. `run -d` does not auto-restart a crashed process: if the managed process dies on its own, `portmarshal list` marks its entry `dead` until you `run -d` it again or release the claim.
 
 ## Attribution and safety
+
+`list --services` builds a service snapshot instead of rendering one row per port. PortMarshal first uses
+managed `run -d`, Docker, and PM2 identities, then groups ordinary listeners by canonical project and PGID.
+Listeners sharing one socket are grouped only when their project attribution agrees. The result exposes all
+listener PIDs, same-PGID wrapper ancestors, ports, claims, attachment state, ownership confidence, and the
+safe stop strategy. Use `list --services --json` for the versioned `{ "schemaVersion": 1, "services": [...] }`
+shape; the existing per-port `list --json` output remains available.
+
+Attachment and ownership are separate: a detached service with a matching project claim is still active and
+corroborated, so it is not counted as a menubar error. A reserved claim in a project with exactly one live
+service is shown as related and reviewable; PortMarshal never auto-releases or merges it solely because the
+project path matches.
 
 PortMarshal follows the process parent chain to identify `claude-code`, `cursor`, `antigravity`, `vscode/electron`, `terminal`, `docker`, and `pm2`. PM2-managed listeners are enriched from `pm2 jlist`, displayed as `pm2:<app-name>`, and attributed to the application's configured cwd; the full PM2 environment is never retained. For published Docker ports, PortMarshal inspects running-container metadata: shared Docker Desktop listeners are split by container, the source is shown as `docker:<compose-project>/<service>`, and the host project directory is recovered from Compose, Dev Container, or bind-mount metadata. If managed-runtime metadata is unavailable, attribution safely falls back without inventing ownership. PortMarshal also recognizes `launchd:<label>` on macOS and `systemd:<unit>` on Linux. A process reparented to PID 1 without a recognized manager is labeled `detached` — this is a review signal, not proof that the process is abandoned. For detached processes the parent chain is gone, so PortMarshal falls back to environment-variable remnants (macOS `ps eww`, Linux `/proc/<pid>/environ`): markers such as `CLAUDECODE=1` or an IDE bundle identifier reveal who originally launched the process, shown as `detached (claude-code)`. Only a small allowlist of marker keys is read — the full environment, which may contain secrets, is never retained. Command output also redacts common credential-bearing flags, assignments, headers, URL userinfo, and query parameters by default. `--show-sensitive-command` reveals the raw command for local debugging; do not paste that output into issues or agent transcripts.
 
@@ -141,6 +153,6 @@ pnpm build
 
 GitHub Actions runs build, unit tests, and a real listener smoke test on macOS and Linux with Node.js 22 and 24. Tagged releases publish to npm with provenance.
 
-Design: [`docs/specs/2026-07-16-portmarshal-design.md`](docs/specs/2026-07-16-portmarshal-design.md) · [v0.7.0 agent-session ownership](docs/specs/2026-08-20-v0.7.0-agent-session-ownership.md) · [Changelog](CHANGELOG.md)
+Design: [`docs/specs/2026-07-16-portmarshal-design.md`](docs/specs/2026-07-16-portmarshal-design.md) · [v0.7.0 agent-session ownership](docs/specs/2026-08-20-v0.7.0-agent-session-ownership.md) · [v0.8.0 service-level ownership](docs/specs/2026-08-24-v0.8.0-service-ownership.md) · [Changelog](CHANGELOG.md)
 
 macOS and Linux · Node.js ≥ 18.17 · zero runtime dependencies · MIT

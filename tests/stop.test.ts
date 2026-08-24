@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { classifyTarget, terminate, scanListeners } from "../src/scan.js";
 import type { ProcessInfo, RegistryEntry } from "../src/types.js";
 import type { Flags } from "../src/flags.js";
-import stop from "../src/commands/stop.js";
+import stop, { listenersOnPort, portsNoLongerListening } from "../src/commands/stop.js";
 import { Registry } from "../src/registry.js";
 import { pidAlive, processGroupAlive } from "../src/ready.js";
 import { ownerFingerprint } from "../src/owner.js";
@@ -63,6 +63,20 @@ test("classifyTarget: 已知实时项目归属不会被多端口 claim 覆盖", 
   assert.equal(classifyTarget(multi, "/p/me", reversed), "foreign");
 });
 
+test("listenersOnPort 保留共享 socket 的全部 listener PID", () => {
+  const scan = [
+    proc({ pid: 101, ports: [3000] }),
+    proc({ pid: 102, ports: [3000, 3001] }),
+    proc({ pid: 103, ports: [4000] }),
+  ];
+  assert.deepEqual(listenersOnPort(scan, 3000).map((item) => item.pid), [101, 102]);
+});
+
+test("portsNoLongerListening 只释放复扫后确实消失的端口", () => {
+  const after = [proc({ pid: 102, ports: [3001] })];
+  assert.deepEqual(portsNoLongerListening([3000, 3001], after), [3000]);
+});
+
 test("terminate: SIGTERM 即退 → term", async () => {
   let sent: string[] = [];
   let aliveCalls = 0;
@@ -101,7 +115,7 @@ test("terminate: EPERM 向上抛出，不谎报成功", async () => {
 function stopFlagsOf(over: Partial<Flags>): Flags {
   return {
     json: false, all: false, force: false, gui: false, install: false,
-    killDetached: false, restart: false, detach: false, follow: false,
+    killDetached: false, dryRun: false, services: false, restart: false, detach: false, follow: false,
     showSensitiveCommand: false,
     positional: [], rest: [], ...over,
   };

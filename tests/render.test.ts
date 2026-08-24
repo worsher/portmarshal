@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatTable, formatWatchFrame, C } from "../src/render.js";
+import { formatServiceWatchFrame, formatTable, formatWatchFrame, C } from "../src/render.js";
 import { isDeadRun } from "../src/merge.js";
+import { buildServiceSnapshot } from "../src/services.js";
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -75,4 +76,22 @@ test("formatWatchFrame: run -d 托管 claim 进程已死 → dead 标记；存�
   assert.match(deadLine ?? "", /dead\s*$/);
   assert.doesNotMatch(aliveLine ?? "", /dead/);
   assert.doesNotMatch(plainLine ?? "", /dead/);
+});
+
+test("formatServiceWatchFrame 按 service id 追踪并展示多端口", () => {
+  const services = buildServiceSnapshot([{
+    pid: 10,
+    ppid: 9,
+    pgid: 9,
+    ports: [3000, 3001],
+    procName: "node",
+    command: "node dev",
+    cwd: "/p/app",
+    inferredProject: null,
+    source: "terminal",
+  }], []).services;
+  const out = formatServiceWatchFrame(services, new Set());
+  assert.match(out, /watch --services/);
+  assert.match(out, /3000,3001/);
+  assert.match(out, /10/);
 });

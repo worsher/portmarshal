@@ -43,6 +43,11 @@ test("parseFlags: --dry-run 需要显式开启", () => {
   assert.equal(parseFlags([]).dryRun, false);
 });
 
+test("parseFlags: --services 需要显式开启", () => {
+  assert.equal(parseFlags(["--services"]).services, true);
+  assert.equal(parseFlags([]).services, false);
+});
+
 test("parseFlags: --wait-timeout 正整数校验", () => {
   assert.equal(parseFlags(["--wait-timeout", "45"]).waitTimeout, 45);
   assert.throws(() => parseFlags(["--wait-timeout", "0"]));

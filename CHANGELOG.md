@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0 — 2026-08-24
+
+- Add versioned service snapshots that aggregate listener PIDs, same-PGID wrapper ancestry, ports, claims, project attribution, confidence, and safe stop strategy
+- Add `list --services` and `watch --services`, and enrich `whois` JSON/text output with the containing service
+- Group SwiftBar rows by service, show listener/wrapper PIDs and claim relations, and stop counting corroborated detached services as errors
+- Preserve every PID reported for a shared Linux socket and block ambiguous shared-port stops until explicit review; release claims only after a rescan confirms the port is gone
+- Keep different PGIDs in the same project separate unless they demonstrably share a socket, and never auto-release a related reserved claim based on project path alone
+- Show the running PortMarshal version and executable path in the SwiftBar footer
+
 ## 0.7.1 — 2026-08-24
 
 - Replace the SwiftBar menu's one-click detached-service cleanup with a terminal-based `gc --dry-run` review action

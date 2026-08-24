@@ -4,6 +4,7 @@ import {
   parseLsofListeners, parsePsTable, traceSource,
   inferProjectFromCommand, isNoise, parseLaunchctlList, parsePsCommands, parseLsofCwds,
   parseSsListeners, parseCgroupServiceUnit,
+  collectGroupAncestors,
   parseDockerInspect, parsePm2Jlist, scanListeners, resolveProjectDir, displaySource,
   originFromEnv, parseMacEnvOrigins, parseEnvironOrigin,
 } from "../src/scan.js";
@@ -24,6 +25,19 @@ test("parsePsTable 建立 pid→行 映射", () => {
   const table = parsePsTable(PS_TABLE);
   assert.equal(table.get(8660)?.ppid, 700);
   assert.equal(table.get(2755)?.comm.endsWith("Python"), true);
+});
+
+test("collectGroupAncestors 只保留同 PGID wrapper 父链并脱敏命令", () => {
+  const table = parsePsTable(`100 1 100 npm\n101 100 100 node\n50 1 50 claude\n`);
+  const commands = parsePsCommands(`100 npm run dev --token secret\n101 node vite\n50 claude\n`);
+  assert.deepEqual(collectGroupAncestors(101, table, commands), [{
+    pid: 100,
+    ppid: 1,
+    pgid: 100,
+    procName: "npm",
+    command: "npm run dev --token [REDACTED]",
+  }]);
+  assert.deepEqual(collectGroupAncestors(50, table, commands), []);
 });
 
 test("traceSource 识别 cursor / detached / 未知", () => {
@@ -110,6 +124,7 @@ test("scanListeners 组装 ProcessInfo：去重端口、归属 cwd、来源", as
   assert.deepEqual(umi.ports, [8000]); // IPv4+IPv6 去重
   assert.equal(umi.source, "cursor");
   assert.equal(umi.inferredProject, "/Users/worsher/code/work/mu_frontend");
+  assert.equal(umi.ppid, 700);
 });
 
 test("resolveProjectDir 优先 cwd，cwd 为根目录时用 inferredProject", () => {
@@ -274,7 +289,8 @@ test("parseSsListeners 解析 ss -tlnp：IPv6/多 pid 共享/无权限行", () =
   assert.deepEqual(entries, [
     { pid: 1234, port: 8000, address: "127.0.0.1" },
     { pid: 2345, port: 9000, address: "[::1]" },
-    { pid: 3456, port: 3000, address: "0.0.0.0" }, // 多 pid 取第一个
+    { pid: 3456, port: 3000, address: "0.0.0.0" },
+    { pid: 3457, port: 3000, address: "0.0.0.0" },
     // 22 端口无 Process 列（无权限）→ 无法归属，跳过
   ]);
 });

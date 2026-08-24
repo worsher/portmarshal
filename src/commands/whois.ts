@@ -4,6 +4,8 @@ import path from "node:path";
 import type { Flags } from "../cli.js";
 import { EXIT } from "../types.js";
 import { scanListeners, resolveProjectDir, displaySource } from "../scan.js";
+import { Registry } from "../registry.js";
+import { buildServiceSnapshot, findServicesByPort } from "../services.js";
 
 /** 受管服务按 label 探测服务定义文件的常规位置（macOS plist / Linux systemd unit） */
 async function findServiceDefinition(source: string): Promise<{ label: string; file: string | null } | null> {
@@ -46,14 +48,19 @@ export default async function whois(flags: Flags): Promise<number> {
     process.stderr.write("Usage: portmarshal whois <port>\n");
     return EXIT.ERR;
   }
-  const infos = await scanListeners(undefined, undefined, !flags.showSensitiveCommand);
+  const [infos, registry] = await Promise.all([
+    scanListeners(undefined, undefined, !flags.showSensitiveCommand),
+    new Registry().load(),
+  ]);
   const hit = infos.find((p) => p.ports.includes(port));
   if (!hit) {
     process.stderr.write(`Nothing is listening on port ${port}\n`);
     return EXIT.NOT_FOUND;
   }
+  const services = findServicesByPort(buildServiceSnapshot(infos, registry), port);
+  const service = services[0] ?? null;
   if (flags.json) {
-    process.stdout.write(JSON.stringify(hit, null, 2) + "\n");
+    process.stdout.write(JSON.stringify({ ...hit, service, services }, null, 2) + "\n");
     return EXIT.OK;
   }
   const lines = [
@@ -63,6 +70,22 @@ export default async function whois(flags: Flags): Promise<number> {
     `Project:  ${resolveProjectDir(hit) ?? "?"}`,
     `Command:  ${hit.command}`,
   ];
+  if (service) {
+    lines.push(`Service:  ${service.name} (${service.id})`);
+    lines.push(`Activity: ${service.activity} · ${service.attachment} · ${service.confidence}`);
+    lines.push(`Ports:    ${service.ports.join(", ")}`);
+    lines.push(`Listeners:${service.listenerPids.length ? ` ${service.listenerPids.join(", ")}` : " none"}`);
+    if (service.wrapperPids.length) lines.push(`Wrappers: ${service.wrapperPids.join(", ")}`);
+    if (service.pgid !== undefined) lines.push(`PGID:     ${service.pgid}`);
+    if (service.claims.length) {
+      lines.push(`Claims:   ${service.claims.map((claim) => `${claim.entry.name}@${claim.entry.port} (${claim.relation})`).join(", ")}`);
+    }
+    lines.push(`Stop plan: ${service.stopMode}`);
+    if (services.length > 1) {
+      lines.push(`Conflict: ${services.length} distinct services share port ${port}`);
+      lines.push(`Owners:   ${services.map((owner) => `${owner.project ?? "?"} [${owner.listenerPids.join(",")}]`).join("; ")}`);
+    }
+  }
   if (hit.docker) {
     lines.push(`Container: ${hit.docker.containerName} (${hit.docker.containerId.slice(0, 12)})`);
     if (hit.docker.composeProject) lines.push(`Compose:  ${hit.docker.composeProject}`);

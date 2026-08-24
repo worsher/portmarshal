@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import path from "node:path";
-import type { DockerInfo, ListenEntry, Pm2Info, ProcessInfo, PsRow, RegistryEntry } from "./types.js";
+import type { DockerInfo, ListenEntry, Pm2Info, ProcessInfo, ProcessRef, PsRow, RegistryEntry } from "./types.js";
 import { realExec, type Exec } from "./exec.js";
 import { redactCommand } from "./redact.js";
 
@@ -60,20 +60,47 @@ export function parseLaunchctlList(text: string): Map<number, string> {
   return services;
 }
 
-/** Linux: ss -tlnp 输出 → 监听条目（无 Process 列的行无法归属，跳过；多 pid 共享 socket 取第一个） */
+/** Linux: ss -tlnp 输出 → 监听条目（无 Process 列的行无法归属，跳过；共享 socket 保留全部 pid） */
 export function parseSsListeners(text: string): ListenEntry[] {
   const out: ListenEntry[] = [];
   for (const line of text.split("\n")) {
     if (!/^LISTEN\b/.test(line)) continue;
-    const pidMatch = /pid=(\d+)/.exec(line);
-    if (!pidMatch) continue;
+    const pids = [...line.matchAll(/pid=(\d+)/g)].map((match) => Number(match[1]));
+    if (!pids.length) continue;
     const cols = line.trim().split(/\s+/);
     const local = cols[3] ?? "";
     const i = local.lastIndexOf(":");
     if (i < 0) continue;
     const port = Number(local.slice(i + 1));
     if (!Number.isFinite(port) || port <= 0) continue;
-    out.push({ pid: Number(pidMatch[1]), port, address: local.slice(0, i) });
+    for (const pid of new Set(pids)) out.push({ pid, port, address: local.slice(0, i) });
+  }
+  return out;
+}
+
+/** Collect only parent processes in the listener's process group; agent/terminal parents outside the job stay out. */
+export function collectGroupAncestors(
+  pid: number,
+  table: Map<number, PsRow>,
+  commands: Map<number, string>,
+  redactCommands = true,
+): ProcessRef[] {
+  const root = table.get(pid);
+  if (!root?.pgid) return [];
+  const out: ProcessRef[] = [];
+  let parentPid = root.ppid;
+  for (let depth = 0; depth < 20 && parentPid > 1; depth++) {
+    const row = table.get(parentPid);
+    if (!row || row.pgid !== root.pgid || row.pid === row.ppid) break;
+    const command = commands.get(row.pid) ?? row.comm;
+    out.push({
+      pid: row.pid,
+      ppid: row.ppid,
+      ...(row.pgid === undefined ? {} : { pgid: row.pgid }),
+      procName: row.comm.split("/").pop() ?? row.comm,
+      command: redactCommands ? redactCommand(command) : command,
+    });
+    parentPid = row.ppid;
   }
   return out;
 }
@@ -507,15 +534,18 @@ export async function scanListeners(
     const ports = byPid.get(pid)!;
     const command = commands.get(pid) ?? "";
     const comm = table.get(pid)?.comm ?? "?";
+    const row = table.get(pid);
     return {
       pid,
-      pgid: table.get(pid)?.pgid,
+      ppid: row?.ppid,
+      pgid: row?.pgid,
       ports: [...ports].sort((a, b) => a - b),
       procName: comm.split("/").pop() ?? "?",
       command: redactCommands ? redactCommand(command) : command,
       cwd: cwds.get(pid) ?? null,
       inferredProject: inferProjectFromCommand(command),
       source: traceSource(pid, table, managedServices),
+      ancestors: collectGroupAncestors(pid, table, commands, redactCommands),
     };
   });
   // detached 的进程父链已断，补一次 env 溯源（只查这几个 pid，不随监听总数增长）
