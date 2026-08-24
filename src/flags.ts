@@ -5,6 +5,7 @@ export interface Flags {
   gui: boolean;
   install: boolean;
   killDetached: boolean;
+  dryRun: boolean;
   restart: boolean;
   detach: boolean;
   follow: boolean;
@@ -23,7 +24,7 @@ export interface Flags {
 export function parseFlags(args: string[]): Flags {
   const f: Flags = {
     json: false, all: false, force: false, gui: false,
-    install: false, killDetached: false, restart: false,
+    install: false, killDetached: false, dryRun: false, restart: false,
     detach: false, follow: false, showSensitiveCommand: false,
     positional: [], rest: [],
   };
@@ -42,6 +43,7 @@ export function parseFlags(args: string[]): Flags {
       case "--install": f.install = true; break;
       case "--kill-detached": f.killDetached = true; break;
       case "--kill-orphans": f.killDetached = true; break; // v0.2 compatibility alias
+      case "--dry-run": f.dryRun = true; break;
       case "--project": f.project = args[++i]; break;
       case "--wait-timeout": {
         const s = Number(args[++i]);

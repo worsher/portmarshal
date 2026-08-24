@@ -16,7 +16,7 @@ Usage:
   portmarshal logs <name|port> [--project DIR] [-f] [-n N] [--json]
   portmarshal release <name> [--force]
   portmarshal stop <port|name> [--force|--gui] [--json] [--show-sensitive-command]
-  portmarshal gc [--kill-detached]
+  portmarshal gc [--dry-run|--kill-detached]
   portmarshal watch
   portmarshal menubar [--install]
   portmarshal -v | --version

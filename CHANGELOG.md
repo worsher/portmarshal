@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1 — 2026-08-24
+
+- Replace the SwiftBar menu's one-click detached-service cleanup with a terminal-based `gc --dry-run` review action
+- Add `gc --dry-run` to report stale claims and detached service candidates without releasing claims or stopping processes
+
 ## 0.7.0 — 2026-08-20
 
 - Bind cooperative `claim` and `run` records to an agent-session owner when `PORTMARSHAL_OWNER` or a Codex thread/session ID is available

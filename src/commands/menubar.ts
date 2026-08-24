@@ -41,7 +41,7 @@ export function renderMenubar(entries: MergedEntry[], binPath: string): string {
     }
   }
   lines.push("---");
-  lines.push(`Clean detached services (gc) | bash="${safeParam(binPath)}" param1=gc param2=--kill-detached terminal=false refresh=true`);
+  lines.push(`Review stale claims and detached services… | bash="${safeParam(binPath)}" param1=gc param2=--dry-run terminal=true refresh=true`);
   lines.push("Refresh | refresh=true");
   return lines.join("\n") + "\n";
 }

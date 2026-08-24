@@ -59,3 +59,11 @@ test("renderMenubar detached 行带 env 溯源标签", () => {
   const out = renderMenubar([e], "/bin/portmarshal");
   assert.match(out, /8901 .* · detached \(claude-code\)/);
 });
+
+test("renderMenubar cleanup action 仅打开 dry-run 审查，不一键停止 detached 服务", () => {
+  const out = renderMenubar([entry(8901, "unregistered", "detached")], "/bin/portmarshal");
+  const review = out.split("\n").find((line) => line.includes("Review stale claims"))!;
+  assert.match(review, /param1=gc.*param2=--dry-run/);
+  assert.match(review, /terminal=true/);
+  assert.doesNotMatch(out, /--kill-detached/);
+});

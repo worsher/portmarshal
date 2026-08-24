@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { gcCandidates } from "../src/commands/gc.js";
+import { gcCandidates, staleClaimCandidates } from "../src/commands/gc.js";
 import type { ProcessInfo, RegistryEntry } from "../src/types.js";
 
 function proc(over: Partial<ProcessInfo>): ProcessInfo {
@@ -58,4 +58,17 @@ test("gcCandidates: 噪声进程或非 detached 来源不入候选，即便无�
   const noisy = proc({ pid: 202, procName: "language_server_macos_arm" });
   const notDetached = proc({ pid: 203, source: "cursor" });
   assert.deepEqual(gcCandidates([noisy, notDetached], []), []);
+});
+
+test("staleClaimCandidates: dry-run 只返回超过 30 分钟且未监听的活跃 claim", () => {
+  const now = Date.parse("2026-08-24T12:00:00.000Z");
+  const stale = reg({ name: "old", port: 3000, claimedAt: "2026-08-24T11:00:00.000Z" });
+  const fresh = reg({ name: "fresh", port: 3001, claimedAt: "2026-08-24T11:45:00.000Z" });
+  const listening = reg({ name: "live", port: 3002, claimedAt: "2026-08-24T11:00:00.000Z" });
+  const released = reg({ name: "released", port: 3003, claimedAt: "2026-08-24T11:00:00.000Z", released: true });
+
+  assert.deepEqual(
+    staleClaimCandidates([stale, fresh, listening, released], new Set([3002]), now),
+    [stale],
+  );
 });

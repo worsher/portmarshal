@@ -60,7 +60,7 @@ On first use, PortMarshal copies an existing `~/.portscout/registry.json` into `
 | `portmarshal logs <name\|port> [-n N] [-f] [--json]` | Show or follow the log of a service started with `run -d` |
 | `portmarshal release <name> [--force]` | Release a claim without stopping its process; another session's claim requires explicit review and `--force` |
 | `portmarshal stop <port\|name> [--force\|--gui]` | Stop a service behind the ownership guard |
-| `portmarshal gc [--kill-detached]` | Reap stale claims and review or stop detached service candidates |
+| `portmarshal gc [--dry-run\|--kill-detached]` | Preview cleanup, reap stale claims, or stop detached service candidates |
 | `portmarshal watch` | Refreshing terminal dashboard; press `q` to quit |
 | `portmarshal menubar [--install]` | SwiftBar menu with guarded click-to-stop actions |
 

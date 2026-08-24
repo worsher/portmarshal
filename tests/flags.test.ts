@@ -38,6 +38,11 @@ test("parseFlags: --show-sensitive-command 需要显式开启", () => {
   assert.equal(parseFlags([]).showSensitiveCommand, false);
 });
 
+test("parseFlags: --dry-run 需要显式开启", () => {
+  assert.equal(parseFlags(["--dry-run"]).dryRun, true);
+  assert.equal(parseFlags([]).dryRun, false);
+});
+
 test("parseFlags: --wait-timeout 正整数校验", () => {
   assert.equal(parseFlags(["--wait-timeout", "45"]).waitTimeout, 45);
   assert.throws(() => parseFlags(["--wait-timeout", "0"]));

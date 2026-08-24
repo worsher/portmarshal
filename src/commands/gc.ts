@@ -22,14 +22,32 @@ export function gcCandidates(scan: ProcessInfo[], activeEntries: RegistryEntry[]
   });
 }
 
+/** Find claims gc would release, without mutating the registry. */
+export function staleClaimCandidates(
+  entries: RegistryEntry[],
+  listeningPorts: Set<number>,
+  now = Date.now(),
+): RegistryEntry[] {
+  return entries.filter((entry) => {
+    if (entry.released || listeningPorts.has(entry.port)) return false;
+    return now - Date.parse(entry.claimedAt) > 30 * 60 * 1000;
+  });
+}
+
 export default async function gc(flags: Flags): Promise<number> {
+  if (flags.dryRun && flags.killDetached) {
+    process.stderr.write("Choose either --dry-run or --kill-detached, not both\n");
+    return EXIT.ERR;
+  }
   const registry = new Registry();
   const scan = await scanListeners(undefined, undefined, !flags.showSensitiveCommand);
   const listening = new Set(scan.flatMap((p) => p.ports));
 
-  const removed = await registry.gcStale(listening);
-  for (const e of removed) {
-    process.stderr.write(`Reaped stale claim ${e.name}@${e.project} → ${e.port}\n`);
+  const stale = flags.dryRun
+    ? staleClaimCandidates(await registry.load(), listening)
+    : await registry.gcStale(listening);
+  for (const e of stale) {
+    process.stderr.write(`${flags.dryRun ? "Stale claim" : "Reaped stale claim"} ${e.name}@${e.project} → ${e.port}\n`);
   }
 
   // gcStale 之后重新读一次 registry：豁免背书只能认「活跃」记录，
@@ -37,7 +55,13 @@ export default async function gc(flags: Flags): Promise<number> {
   const entries = await registry.load();
   const detached = gcCandidates(scan, entries);
   if (detached.length === 0) {
-    process.stderr.write("No detached services found\n");
+    if (flags.dryRun) {
+      process.stderr.write(stale.length === 0
+        ? "No stale claims or detached services found\n"
+        : `Review only: ${stale.length} stale claim candidate(s), 0 detached service candidate(s); nothing was changed.\n`);
+    } else {
+      process.stderr.write("No detached services found\n");
+    }
     return EXIT.OK;
   }
   for (const p of detached) {
@@ -55,7 +79,9 @@ export default async function gc(flags: Flags): Promise<number> {
       process.stderr.write(`${C.yellow}Detached service${C.reset} ${desc}\n`);
     }
   }
-  if (!flags.killDetached) {
+  if (flags.dryRun) {
+    process.stderr.write(`\nReview only: ${stale.length} stale claim candidate(s), ${detached.length} detached service candidate(s); nothing was changed.\n`);
+  } else if (!flags.killDetached) {
     process.stderr.write(`\nFound ${detached.length} detached service candidate(s). Review them, then run portmarshal gc --kill-detached to stop them.\n`);
   }
   return EXIT.OK;
