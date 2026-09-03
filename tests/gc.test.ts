@@ -66,9 +66,11 @@ test("staleClaimCandidates: dry-run 只返回超过 30 分钟且未监听的活�
   const fresh = reg({ name: "fresh", port: 3001, claimedAt: "2026-08-24T11:45:00.000Z" });
   const listening = reg({ name: "live", port: 3002, claimedAt: "2026-08-24T11:00:00.000Z" });
   const released = reg({ name: "released", port: 3003, claimedAt: "2026-08-24T11:00:00.000Z", released: true });
+  const boundary = reg({ name: "boundary", port: 3004, claimedAt: "2026-08-24T11:30:00.000Z" });
+  const justStale = reg({ name: "just-stale", port: 3005, claimedAt: "2026-08-24T11:29:59.999Z" });
 
   assert.deepEqual(
-    staleClaimCandidates([stale, fresh, listening, released], new Set([3002]), now),
-    [stale],
+    staleClaimCandidates([stale, fresh, listening, released, boundary, justStale], new Set([3002]), now),
+    [stale, justStale],
   );
 });

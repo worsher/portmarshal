@@ -93,8 +93,16 @@ claim、附着状态、归属可信度和安全停止方案。`list --services -
 
 附着状态和归属可信度彼此独立：detached 服务如果有一致的项目与 claim 证据，仍是活跃且已交叉验证的
 服务，不会被菜单栏计为错误。同一项目只有一个活跃服务时，未监听的 claim 可以显示为“相关、待复核”；
-PortMarshal 不会仅凭项目目录相同就自动合并或释放它。菜单栏的垃圾清理入口只会在终端执行
-`gc --dry-run` 供检查，不会一键运行 `gc --kill-detached`。
+PortMarshal 不会仅凭项目目录相同就自动合并或释放它。claim 未监听超过 30 分钟后，不再参与活跃服务的
+drift 推断：正常监听保持无告警，过期 claim 以独立告警项显示，并继续留给 `gc --dry-run` 复核。菜单栏的
+垃圾清理入口只会在终端执行 `gc --dry-run` 供检查，不会一键运行 `gc --kill-detached`。
+
+### SwiftBar 置灰排查
+
+如果正常服务行或子菜单在 SwiftBar 2.1.1 中意外置灰，可刷新或重启 SwiftBar，并在可用时升级到
+SwiftBar 2.1.2 或更高版本。这是上游的增量子菜单渲染问题（[SwiftBar #515](https://github.com/swiftbar/SwiftBar/issues/515)，
+由 [SwiftBar #518](https://github.com/swiftbar/SwiftBar/pull/518) 修复）；PortMarshal 不会为服务行输出禁用属性。
+橙色 `⚠` 行则不同：它是 PortMarshal 有意展示的复核信号，具体 claim 或归属信息位于对应子菜单中。
 
 PortMarshal 沿父进程链识别 `claude-code`、`cursor`、`antigravity`、`vscode/electron`、`terminal`、`docker` 和 `pm2`。PM2 托管的监听会通过 `pm2 jlist` 补全，来源显示为 `pm2:<应用名>`，项目使用应用配置的 cwd；完整 PM2 环境变量不会被保留。对于已发布到宿主机的 Docker 端口，它会读取运行中容器的元数据：把 Docker Desktop 的共享监听按容器拆分，来源显示为 `docker:<compose项目>/<服务>`，并从 Compose、Dev Container 或 bind mount 元数据恢复宿主机项目目录；受管运行时元数据不可用时会安全回退，不伪造归属。同时识别 macOS 的 `launchd:<label>` 与 Linux 的 `systemd:<unit>`。被重新挂到 PID 1、但无法识别受管服务的进程会标记为 `detached`——这是需要检查的信号，并不等于已经证明它是无主孤儿。命令输出默认会脱敏常见凭证 flag、赋值、Header、URL 用户信息和查询参数；仅在本机调试时才应显式使用 `--show-sensitive-command`，不要把原始输出贴进 issue 或 Agent 会话。
 
@@ -136,6 +144,6 @@ pnpm build
 
 GitHub Actions 会使用 Node.js 22 与 24 在 macOS、Linux 上执行构建、单测和真实监听端口冒烟测试；tag 发布通过 provenance 签名后推送到 npm。
 
-设计文档：[`docs/specs/2026-07-16-portmarshal-design.md`](docs/specs/2026-07-16-portmarshal-design.md) · [v0.7.0 Agent 会话所有权](docs/specs/2026-08-20-v0.7.0-agent-session-ownership.md) · [v0.8.0 服务级归属](docs/specs/2026-08-24-v0.8.0-service-ownership.md) · [更新记录](CHANGELOG.md)
+设计文档：[`docs/specs/2026-07-16-portmarshal-design.md`](docs/specs/2026-07-16-portmarshal-design.md) · [v0.7.0 Agent 会话所有权](docs/specs/2026-08-20-v0.7.0-agent-session-ownership.md) · [v0.8.0 服务级归属](docs/specs/2026-08-24-v0.8.0-service-ownership.md) · [v0.8.1 归属修复](docs/specs/2026-09-03-v0.8.1-attribution-fixes.md) · [更新记录](CHANGELOG.md)
 
 macOS 与 Linux · Node.js ≥ 18.17 · 零运行时依赖 · MIT

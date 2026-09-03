@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.1 — 2026-09-03
+
+- Keep claims that have been unlistened for more than 30 minutes from contaminating live-service attribution; the healthy listener remains unmarked while the stale claim appears as a separate review item
+- Use the same stale-claim policy for service snapshots and `gc`, including an exact 30-minute boundary regression test
+- Show claim-only SwiftBar rows by claim name instead of repeating the project basename
+- Document the SwiftBar 2.1.1 incremental submenu rendering bug and the upstream 2.1.2 fix path
+
 ## 0.8.0 — 2026-08-24
 
 - Add versioned service snapshots that aggregate listener PIDs, same-PGID wrapper ancestry, ports, claims, project attribution, confidence, and safe stop strategy

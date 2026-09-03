@@ -4,6 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import type { RegistryEntry } from "./types.js";
 
+export const CLAIM_STALE_MS = 30 * 60 * 1000;
+
+/** Single source of truth for claims that are eligible for gc and must not influence live service attribution. */
+export function isStaleClaim(
+  entry: RegistryEntry,
+  listeningPorts: Set<number>,
+  now = Date.now(),
+): boolean {
+  if (entry.released || listeningPorts.has(entry.port)) return false;
+  return now - Date.parse(entry.claimedAt) > CLAIM_STALE_MS;
+}
+
 export class LockTimeoutError extends Error {
   constructor() { super("Registry lock timed out; retry the command"); }
 }
@@ -311,10 +323,7 @@ export class Registry {
       const entries = await this.load();
       const removed: RegistryEntry[] = [];
       const next = entries.map((e) => {
-        if (e.released) return e;
-        const listening = listeningPorts.has(e.port);
-        const age = now - Date.parse(e.claimedAt);
-        if (!listening && age > 30 * 60 * 1000) {
+        if (isStaleClaim(e, listeningPorts, now)) {
           removed.push(e);
           return {
             ...e,

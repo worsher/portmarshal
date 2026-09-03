@@ -93,6 +93,39 @@ test("list --all --json 能归属到正确 cwd 且默认脱敏；显式 flag 可
   assert.equal(JSON.stringify(rawSnapshot.services).includes("portmarshal-smoke-secret"), true);
 });
 
+test("list --services: 真实 listener 不被同项目过期 claim 标成 drift", async () => {
+  const acceptanceStateDir = path.join(projDir, ".portmarshal-v081");
+  await fs.mkdir(acceptanceStateDir, { recursive: true });
+  await fs.writeFile(path.join(acceptanceStateDir, "registry.json"), JSON.stringify([{
+    name: "stale-preview",
+    project: projDir,
+    port: 4173,
+    claimedAt: "2000-01-01T00:00:00.000Z",
+  }]), { mode: 0o600 });
+
+  const { stdout } = await execFileP("node", [CLI, "list", "--services", "--all", "--json"], {
+    env: { ...process.env, PORTMARSHAL_STATE_DIR: acceptanceStateDir },
+  });
+  const snapshot = JSON.parse(stdout) as {
+    services: Array<{
+      name: string;
+      activity: string;
+      ports: number[];
+      claims: unknown[];
+      warnings: string[];
+    }>;
+  };
+
+  const active = snapshot.services.find((service) => service.activity === "active" && service.ports.includes(PORT));
+  assert.ok(active);
+  assert.deepEqual(active!.claims, []);
+  assert.deepEqual(active!.warnings, []);
+
+  const stale = snapshot.services.find((service) => service.activity === "reserved" && service.ports.includes(4173));
+  assert.equal(stale?.name, "stale-preview");
+  assert.deepEqual(stale?.warnings, ["stale-claim"]);
+});
+
 test("whois 未监听端口 exit=2", async () => {
   const { code } = await cli(["whois", "1"]);
   assert.equal(code, 2);

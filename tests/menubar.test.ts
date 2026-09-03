@@ -104,3 +104,37 @@ test("renderMenubar corroborated detached 服务不计异常，并展示 wrapper
   assert.match(out, /PortMarshal 0\.8\.0/);
   assert.match(out, /Executable: \/bin\/portmarshal/);
 });
+
+test("renderMenubar 过期 claim 单独标记，正常 live service 不置灰或告警", () => {
+  const active = entry(5173, "cursor", "/p/alab_frontend");
+  const stale: ServiceInfo = {
+    id: "svc_stale_4173",
+    name: "alab-preview-review",
+    activity: "reserved",
+    attachment: "none",
+    confidence: "inferred",
+    stopMode: "blocked",
+    project: "/p/alab_frontend",
+    source: "reserved",
+    ports: [4173],
+    listenerPids: [],
+    wrapperPids: [],
+    processes: [],
+    claims: [{
+      relation: "reserved",
+      entry: {
+        name: "alab-preview-review",
+        project: "/p/alab_frontend",
+        port: 4173,
+        claimedAt: "2026-08-24T00:00:00.000Z",
+      },
+    }],
+    warnings: ["stale-claim"],
+  };
+
+  const out = renderMenubar([active, stale], "/bin/portmarshal", "0.8.1");
+  assert.equal(out.split("\n")[0], "⚓2 ⚠1 | color=orange");
+  assert.match(out, /^alab_frontend · active · :5173 · cursor$/m);
+  assert.match(out, /^⚠ alab-preview-review · reserved · :4173 · reserved \| color=orange$/m);
+  assert.doesNotMatch(out, /^⚠ alab_frontend · active · :5173/m);
+});

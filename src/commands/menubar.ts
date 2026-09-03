@@ -22,7 +22,9 @@ export function renderMenubar(services: ServiceInfo[], binPath: string, version 
     lines.push("No listening development services | color=gray");
   }
   for (const service of services) {
-    const projName = service.project ? path.basename(service.project) : service.name;
+    const projName = service.activity === "active" && service.project
+      ? path.basename(service.project)
+      : service.name;
     const ports = service.ports.map((port) => `:${port}`).join(",");
     const source = service.origin ?? service.source;
     const attachment = service.attachment === "detached" ? ` · ${source} · detached` : ` · ${source}`;

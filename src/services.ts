@@ -12,6 +12,7 @@ import type {
 } from "./types.js";
 import { displaySource, resolveProjectDir } from "./scan.js";
 import { pidAlive } from "./ready.js";
+import { isStaleClaim } from "./registry.js";
 
 function canonical(value: string | null): string | null {
   if (!value) return null;
@@ -167,7 +168,7 @@ function serviceFromGroup(group: ProcessGroup, registry: RegistryEntry[]): Servi
   };
 }
 
-function reservedService(entry: RegistryEntry): ServiceInfo {
+function reservedService(entry: RegistryEntry, stale = false): ServiceInfo {
   const project = canonical(entry.project);
   const dead = entry.runPid !== undefined && !pidAlive(entry.runPid);
   return {
@@ -184,17 +185,26 @@ function reservedService(entry: RegistryEntry): ServiceInfo {
     wrapperPids: [],
     processes: [],
     claims: [{ relation: "reserved", entry }],
-    warnings: dead ? ["managed-run-dead"] : [],
+    warnings: dead ? ["managed-run-dead"] : stale ? ["stale-claim"] : [],
   };
 }
 
-export function buildServiceSnapshot(scan: ProcessInfo[], registry: RegistryEntry[]): ServiceSnapshot {
+export function buildServiceSnapshot(
+  scan: ProcessInfo[],
+  registry: RegistryEntry[],
+  now = Date.now(),
+): ServiceSnapshot {
   const registryEntries = activeEntries(registry);
+  const listeningPorts = new Set(scan.flatMap((proc) => proc.ports));
   const services = groupProcesses(scan, registryEntries).map((group) => serviceFromGroup(group, registryEntries));
   const assigned = new Set(services.flatMap((service) => service.claims.map((claim) => claim.entry)));
 
   for (const entry of registryEntries) {
     if (assigned.has(entry)) continue;
+    if (isStaleClaim(entry, listeningPorts, now)) {
+      services.push(reservedService(entry, true));
+      continue;
+    }
     const project = canonical(entry.project);
     const peers = services.filter((service) => service.activity === "active" && service.project === project);
     if (peers.length === 1) {

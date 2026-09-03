@@ -105,7 +105,18 @@ shape; the existing per-port `list --json` output remains available.
 Attachment and ownership are separate: a detached service with a matching project claim is still active and
 corroborated, so it is not counted as a menubar error. A reserved claim in a project with exactly one live
 service is shown as related and reviewable; PortMarshal never auto-releases or merges it solely because the
-project path matches.
+project path matches. Once a claim has been unlistened for more than 30 minutes, it no longer participates in
+live-service drift inference: the healthy listener stays unmarked, while the stale claim is shown as its own
+warning item and remains available to `gc --dry-run` review.
+
+### SwiftBar troubleshooting
+
+If an otherwise normal service row or submenu appears gray in SwiftBar 2.1.1, refresh or restart SwiftBar and
+upgrade to SwiftBar 2.1.2 or newer when available. This is an upstream incremental submenu rendering issue
+([SwiftBar #515](https://github.com/swiftbar/SwiftBar/issues/515), fixed by
+[SwiftBar #518](https://github.com/swiftbar/SwiftBar/pull/518)); PortMarshal does not emit a disabled attribute
+for service rows. An orange `⚠` row is different: it is an intentional PortMarshal review signal, with the
+claim or attribution details shown in that row's submenu.
 
 PortMarshal follows the process parent chain to identify `claude-code`, `cursor`, `antigravity`, `vscode/electron`, `terminal`, `docker`, and `pm2`. PM2-managed listeners are enriched from `pm2 jlist`, displayed as `pm2:<app-name>`, and attributed to the application's configured cwd; the full PM2 environment is never retained. For published Docker ports, PortMarshal inspects running-container metadata: shared Docker Desktop listeners are split by container, the source is shown as `docker:<compose-project>/<service>`, and the host project directory is recovered from Compose, Dev Container, or bind-mount metadata. If managed-runtime metadata is unavailable, attribution safely falls back without inventing ownership. PortMarshal also recognizes `launchd:<label>` on macOS and `systemd:<unit>` on Linux. A process reparented to PID 1 without a recognized manager is labeled `detached` — this is a review signal, not proof that the process is abandoned. For detached processes the parent chain is gone, so PortMarshal falls back to environment-variable remnants (macOS `ps eww`, Linux `/proc/<pid>/environ`): markers such as `CLAUDECODE=1` or an IDE bundle identifier reveal who originally launched the process, shown as `detached (claude-code)`. Only a small allowlist of marker keys is read — the full environment, which may contain secrets, is never retained. Command output also redacts common credential-bearing flags, assignments, headers, URL userinfo, and query parameters by default. `--show-sensitive-command` reveals the raw command for local debugging; do not paste that output into issues or agent transcripts.
 
@@ -153,6 +164,6 @@ pnpm build
 
 GitHub Actions runs build, unit tests, and a real listener smoke test on macOS and Linux with Node.js 22 and 24. Tagged releases publish to npm with provenance.
 
-Design: [`docs/specs/2026-07-16-portmarshal-design.md`](docs/specs/2026-07-16-portmarshal-design.md) · [v0.7.0 agent-session ownership](docs/specs/2026-08-20-v0.7.0-agent-session-ownership.md) · [v0.8.0 service-level ownership](docs/specs/2026-08-24-v0.8.0-service-ownership.md) · [Changelog](CHANGELOG.md)
+Design: [`docs/specs/2026-07-16-portmarshal-design.md`](docs/specs/2026-07-16-portmarshal-design.md) · [v0.7.0 agent-session ownership](docs/specs/2026-08-20-v0.7.0-agent-session-ownership.md) · [v0.8.0 service-level ownership](docs/specs/2026-08-24-v0.8.0-service-ownership.md) · [v0.8.1 attribution fixes](docs/specs/2026-09-03-v0.8.1-attribution-fixes.md) · [Changelog](CHANGELOG.md)
 
 macOS and Linux · Node.js ≥ 18.17 · zero runtime dependencies · MIT

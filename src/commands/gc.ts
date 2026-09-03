@@ -1,7 +1,7 @@
 import type { Flags } from "../cli.js";
 import { EXIT } from "../types.js";
 import { scanListeners, isNoise, terminate, resolveProjectDir } from "../scan.js";
-import { Registry } from "../registry.js";
+import { isStaleClaim, Registry } from "../registry.js";
 import { C } from "../render.js";
 import type { ProcessInfo, RegistryEntry } from "../types.js";
 
@@ -28,10 +28,7 @@ export function staleClaimCandidates(
   listeningPorts: Set<number>,
   now = Date.now(),
 ): RegistryEntry[] {
-  return entries.filter((entry) => {
-    if (entry.released || listeningPorts.has(entry.port)) return false;
-    return now - Date.parse(entry.claimedAt) > 30 * 60 * 1000;
-  });
+  return entries.filter((entry) => isStaleClaim(entry, listeningPorts, now));
 }
 
 export default async function gc(flags: Flags): Promise<number> {
