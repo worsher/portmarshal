@@ -42,6 +42,7 @@ npm install -g portmarshal
 
 | 命令 | 说明 |
 |---|---|
+| `portmarshal doctor [--project DIR] [--json]` | 只读诊断运行环境、会话身份、注册表和服务冲突，不修改状态或停止服务 |
 | `portmarshal list [--services] [--json] [--all] [--project .]` | 按端口显示状态，或把进程树、端口和 claim 聚合为服务 |
 | `portmarshal whois <port> [--json]` | 查询端口以及所属服务的监听 PID、wrapper、PGID、claim 和停止方案 |
 | `portmarshal claim <name> [--prefer N] [--range A-B]` | 分配协作式粘性端口 claim；stdout 仅输出端口号 |
@@ -132,7 +133,11 @@ PortMarshal 只能归属当前用户有权限读取进程元数据的监听。�
 - 用 `portmarshal stop <端口>` 停止服务；退出码 3 表示无法安全确认归属或属于其他活跃服务，应展示归属并在使用 --force 前询问用户。
 ```
 
-可直接复制的 Claude Code skill 位于 [`integrations/claude-code/skills/portmarshal`](integrations/claude-code/skills/portmarshal)。
+完整接入指南覆盖 [Codex](integrations/codex/README.md)、[Claude Code](integrations/claude-code/README.md)
+和 [Cursor](integrations/cursor/README.md)，模板随 npm 包分发，包含后台启动、readiness、日志和停止流程。
+
+先运行 `portmarshal doctor --project . --json` 检查当前环境。退出码 0 也可能包含警告，应同时查看
+`status` 和 `complete`；证据不足不代表服务不存在。参见 [doctor 指南](docs/doctor.md)。
 
 ## 开发
 
@@ -145,5 +150,7 @@ pnpm build
 GitHub Actions 会使用 Node.js 22 与 24 在 macOS、Linux 上执行构建、单测和真实监听端口冒烟测试；tag 发布通过 provenance 签名后推送到 npm。
 
 设计文档：[`docs/specs/2026-07-16-portmarshal-design.md`](docs/specs/2026-07-16-portmarshal-design.md) · [v0.7.0 Agent 会话所有权](docs/specs/2026-08-20-v0.7.0-agent-session-ownership.md) · [v0.8.0 服务级归属](docs/specs/2026-08-24-v0.8.0-service-ownership.md) · [v0.8.1 归属修复](docs/specs/2026-09-03-v0.8.1-attribution-fixes.md) · [更新记录](CHANGELOG.md)
+
+v0.9.0：[Agent 接入与只读 doctor 设计](docs/specs/2026-09-08-v0.9.0-agent-onboarding-doctor.md) · [实施清单](docs/plans/2026-09-08-v0.9.0-agent-onboarding-doctor.md)。
 
 macOS 与 Linux · Node.js ≥ 18.17 · 零运行时依赖 · MIT

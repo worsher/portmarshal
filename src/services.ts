@@ -168,9 +168,9 @@ function serviceFromGroup(group: ProcessGroup, registry: RegistryEntry[]): Servi
   };
 }
 
-function reservedService(entry: RegistryEntry, stale = false): ServiceInfo {
+function reservedService(entry: RegistryEntry, stale = false, alive = pidAlive): ServiceInfo {
   const project = canonical(entry.project);
-  const dead = entry.runPid !== undefined && !pidAlive(entry.runPid);
+  const dead = entry.runPid !== undefined && !alive(entry.runPid);
   return {
     id: serviceId(["reserved", project, entry.name, entry.port]),
     name: entry.name,
@@ -193,6 +193,7 @@ export function buildServiceSnapshot(
   scan: ProcessInfo[],
   registry: RegistryEntry[],
   now = Date.now(),
+  options: { pidAlive?: (pid: number) => boolean } = {},
 ): ServiceSnapshot {
   const registryEntries = activeEntries(registry);
   const listeningPorts = new Set(scan.flatMap((proc) => proc.ports));
@@ -202,7 +203,7 @@ export function buildServiceSnapshot(
   for (const entry of registryEntries) {
     if (assigned.has(entry)) continue;
     if (isStaleClaim(entry, listeningPorts, now)) {
-      services.push(reservedService(entry, true));
+      services.push(reservedService(entry, true, options.pidAlive));
       continue;
     }
     const project = canonical(entry.project);
@@ -216,7 +217,7 @@ export function buildServiceSnapshot(
         peer.warnings.push("port-drift");
       }
     } else {
-      services.push(reservedService(entry));
+      services.push(reservedService(entry, false, options.pidAlive));
     }
   }
 

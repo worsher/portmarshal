@@ -52,6 +52,7 @@ On first use, PortMarshal copies an existing `~/.portscout/registry.json` into `
 
 | Command | What it does |
 |---|---|
+| `portmarshal doctor [--project DIR] [--json]` | Diagnose runtime, owner identity, state and service conflicts without changing state or stopping services |
 | `portmarshal list [--services] [--json] [--all] [--project .]` | List per-port state, or aggregate process trees, ports, and claims into services |
 | `portmarshal whois <port> [--json]` | Inspect one port plus its service listeners, wrappers, PGID, claims, and stop plan |
 | `portmarshal claim <name> [--prefer N] [--range A-B]` | Allocate a cooperative sticky port claim; stdout contains only the port number |
@@ -137,6 +138,12 @@ PortMarshal can only attribute listeners whose process metadata is visible to th
 
 ## Agent integration
 
+Use the [Codex, Claude Code and Cursor integration guides](integrations/README.md) for complete startup,
+readiness, logs and guarded-stop workflows. The adapters ship with the npm package.
+
+Run `portmarshal doctor --project . --json` to check the current environment. Exit 0 may include warnings;
+inspect `status` and `complete` before relying on the findings. See the [doctor guide](docs/doctor.md).
+
 Add this policy to `AGENTS.md`, `CLAUDE.md`, or your editor's agent rules:
 
 ```text
@@ -146,7 +153,8 @@ Add this policy to `AGENTS.md`, `CLAUDE.md`, or your editor's agent rules:
 - Stop services with `portmarshal stop <port>`; exit code 3 means ownership could not be safely verified or another active service owns it, so show the attribution and ask before using --force.
 ```
 
-A ready-to-copy Claude Code skill lives in [`integrations/claude-code/skills/portmarshal`](integrations/claude-code/skills/portmarshal).
+Ready-to-copy skills/rules are available for [Codex](integrations/codex/README.md),
+[Claude Code](integrations/claude-code/README.md), and [Cursor](integrations/cursor/README.md).
 
 ## How it differs
 
@@ -165,5 +173,7 @@ pnpm build
 GitHub Actions runs build, unit tests, and a real listener smoke test on macOS and Linux with Node.js 22 and 24. Tagged releases publish to npm with provenance.
 
 Design: [`docs/specs/2026-07-16-portmarshal-design.md`](docs/specs/2026-07-16-portmarshal-design.md) · [v0.7.0 agent-session ownership](docs/specs/2026-08-20-v0.7.0-agent-session-ownership.md) · [v0.8.0 service-level ownership](docs/specs/2026-08-24-v0.8.0-service-ownership.md) · [v0.8.1 attribution fixes](docs/specs/2026-09-03-v0.8.1-attribution-fixes.md) · [Changelog](CHANGELOG.md)
+
+v0.9.0: [Agent onboarding and read-only doctor design](docs/specs/2026-09-08-v0.9.0-agent-onboarding-doctor.md) · [Implementation checklist](docs/plans/2026-09-08-v0.9.0-agent-onboarding-doctor.md).
 
 macOS and Linux · Node.js ≥ 18.17 · zero runtime dependencies · MIT

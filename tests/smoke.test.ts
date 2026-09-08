@@ -14,6 +14,71 @@ let server: ChildProcess;
 let projDir: string;
 let stateDir: string;
 
+test("doctor: real CLI preserves registry contents, modes, lock and healthy listener", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-doctor-smoke-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const project = await fs.realpath(root);
+  const dir = path.join(project, "state");
+  await fs.mkdir(dir, { mode: 0o755 });
+  const child = spawn(process.execPath, ["-e",
+    'const s=require("http").createServer((q,r)=>r.end("ok"));s.listen(0,"127.0.0.1",()=>console.log(s.address().port));'],
+  { cwd: project, stdio: ["ignore", "pipe", "ignore"] });
+  t.after(() => { child.kill("SIGKILL"); });
+  const port = await new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("doctor fixture did not start")), 5000);
+    child.once("error", (e) => { clearTimeout(timer); reject(e); });
+    child.stdout!.once("data", (data) => { clearTimeout(timer); resolve(Number(String(data).trim())); });
+  });
+  const file = path.join(dir, "registry.json");
+  const raw = JSON.stringify([{ name: "doctor-fixture", project, port, claimedAt: new Date().toISOString(),
+    ownerKey: "v1:aaaaaaaaaaaaaaaaaaaaaaaa", runId: "private-run-sentinel" }]);
+  await fs.writeFile(file, raw, { mode: 0o644 });
+  await fs.mkdir(path.join(dir, ".lock"));
+  const before = await fs.stat(file);
+  const env = { ...process.env, PORTMARSHAL_STATE_DIR: dir, PORTMARSHAL_OWNER: "private-owner-sentinel" };
+  const { stdout } = await execFileP(process.execPath, [CLI, "doctor", "--project", project, "--json"], { env });
+  const report = JSON.parse(stdout);
+  assert.equal(report.schemaVersion, 1);
+  assert.equal(report.owner.source, "explicit");
+  assert.equal(report.complete, false);
+  assert.equal(report.checks.find((c: { id: string }) => c.id === "state.concurrent-change").status, "warn");
+  assert.equal(stdout.includes("sentinel"), false);
+  assert.equal(stdout.includes("aaaaaaaaaaaaaaaaaaaaaaaa"), false);
+  assert.equal(await fs.readFile(file, "utf8"), raw);
+  const after = await fs.stat(file);
+  assert.equal(after.mode, before.mode);
+  assert.equal(after.mtimeMs, before.mtimeMs);
+  assert.deepEqual((await fs.readdir(dir)).sort(), [".lock", "registry.json"]);
+  await waitListening(port);
+  await fs.rmdir(path.join(dir, ".lock")); // remove only the lock created by this test
+  const observed = JSON.parse((await execFileP(process.execPath,
+    [CLI, "doctor", "--project", project, "--json"], { env })).stdout);
+  assert.equal(observed.checks.find((c: { id: string }) => c.id === "scanner.listeners").status, "pass");
+  assert.equal(observed.checks.find((c: { id: string }) => c.id === "services.conflict").status === "error", false);
+  await waitListening(port);
+});
+
+test("doctor: fresh state is not created; malformed registry returns JSON exit 1 without backup", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "portmarshal-doctor-cli-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const dir = path.join(root, "absent");
+  const env = { ...process.env, PORTMARSHAL_STATE_DIR: dir, PORTMARSHAL_OWNER: "doctor-test-owner" };
+  const first = JSON.parse((await execFileP(process.execPath, [CLI, "doctor", "--project", root, "--json"], { env })).stdout);
+  assert.equal(first.checks.find((c: { id: string }) => c.id === "state.registry").status, "pass");
+  await assert.rejects(fs.stat(dir), { code: "ENOENT" });
+  await fs.mkdir(dir, { mode: 0o700 });
+  await fs.writeFile(path.join(dir, "registry.json"), "broken", { mode: 0o600 });
+  await assert.rejects(execFileP(process.execPath, [CLI, "doctor", "--project", root, "--json"], { env }), (e) => {
+    const error = e as { code: number; stdout: string; stderr: string };
+    assert.equal(error.code, 1);
+    assert.equal(JSON.parse(error.stdout).status, "error");
+    assert.equal(error.stderr, "");
+    return true;
+  });
+  assert.deepEqual(await fs.readdir(dir), ["registry.json"]);
+  assert.equal(await fs.readFile(path.join(dir, "registry.json"), "utf8"), "broken");
+});
+
 function waitListening(port: number, timeoutMs = 5000): Promise<void> {
   return new Promise((resolve, reject) => {
     const start = Date.now();

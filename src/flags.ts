@@ -95,3 +95,16 @@ export function parseFlags(args: string[]): Flags {
   }
   return f;
 }
+
+/** Doctor accepts only observational options; existing command parsing remains unchanged. */
+export function validateDoctorArgs(args: string[]): void {
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--json") continue;
+    if (args[i] === "--project") {
+      const value = args[++i];
+      if (!value || value.startsWith("-")) throw new Error("doctor --project requires a directory");
+      continue;
+    }
+    throw new Error("Usage: portmarshal doctor [--project DIR] [--json]");
+  }
+}

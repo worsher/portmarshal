@@ -492,10 +492,17 @@ export function isNoise(procName: string): boolean {
   return NOISE.test(procName);
 }
 
+export interface ScanOptions {
+  managedMetadata?: boolean;
+  readProcFile?: (file: string) => Promise<string>;
+  readProcLink?: (file: string) => Promise<string>;
+}
+
 export async function scanListeners(
   exec: Exec = realExec,
   platform: NodeJS.Platform = process.platform,
   redactCommands = true,
+  options: ScanOptions = {},
 ): Promise<ProcessInfo[]> {
   const linux = platform === "linux";
   // 固定次数并行调用拿全量数据（不随监听进程数增长）
@@ -520,12 +527,12 @@ export async function scanListeners(
 
   // 受管服务标签：macOS 用 launchctl list，Linux 读 /proc/<pid>/cgroup
   const managedServices = linux
-    ? await linuxServiceLabels(pids)
+    ? await linuxServiceLabels(pids, options.readProcFile)
     : new Map([...parseLaunchctlList(launchctlOut)].map(([p, l]) => [p, `launchd:${l}`] as const));
 
   // cwd 反查：macOS 一次 lsof 批量（-p 逗号列表），Linux 读 /proc/<pid>/cwd 符号链接
   const cwds = linux
-    ? await linuxCwds(pids)
+    ? await linuxCwds(pids, options.readProcLink)
     : pids.length
       ? parseLsofCwds(await exec("lsof", ["-a", "-p", pids.join(","), "-d", "cwd", "-Fn"]))
       : new Map<number, string>();
@@ -553,7 +560,7 @@ export async function scanListeners(
   const envOrigins = detachedPids.length === 0
     ? new Map<number, string>()
     : linux
-      ? await linuxEnvOrigins(detachedPids)
+      ? await linuxEnvOrigins(detachedPids, options.readProcFile)
       : parseMacEnvOrigins(await exec("ps", ["eww", "-o", "pid=,command=", "-p", detachedPids.join(",")]));
   const tracedInfos = baseInfos.map((info): ProcessInfo => {
     const origin = envOrigins.get(info.pid);
@@ -561,8 +568,8 @@ export async function scanListeners(
   });
 
   const [dockerPorts, pm2Owners] = await Promise.all([
-    tracedInfos.some((info) => info.source === "docker") ? dockerPortOwners(exec) : [],
-    tracedInfos.some((info) => info.source === "pm2") ? pm2ProcessOwners(exec) : [],
+    options.managedMetadata !== false && tracedInfos.some((info) => info.source === "docker") ? dockerPortOwners(exec) : [],
+    options.managedMetadata !== false && tracedInfos.some((info) => info.source === "pm2") ? pm2ProcessOwners(exec) : [],
   ]);
   const pm2OwnersByPid = new Map(pm2Owners.map((owner) => [owner.pid, owner]));
   const managedInfos = tracedInfos.map((info): ProcessInfo => {

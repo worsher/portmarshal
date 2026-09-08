@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import { EXIT } from "./types.js";
-import { parseFlags } from "./flags.js";
+import { parseFlags, validateDoctorArgs } from "./flags.js";
 import type { Flags } from "./flags.js";
 
 export type { Flags } from "./flags.js";
@@ -9,6 +9,7 @@ export type { Flags } from "./flags.js";
 const HELP = `portmarshal — agent-aware local port ownership and guarded orchestration
 
 Usage:
+  portmarshal doctor [--project DIR] [--json]
   portmarshal list [--services] [--json] [--all] [--project <dir|.>] [--show-sensitive-command]
   portmarshal whois <port> [--json] [--show-sensitive-command]
   portmarshal claim <name> [--prefer N] [--range A-B] [--json]
@@ -24,6 +25,7 @@ Usage:
 
 type CommandFn = (flags: Flags) => Promise<number>;
 const COMMANDS: Record<string, () => Promise<{ default: CommandFn }>> = {
+  doctor: () => import("./commands/doctor.js"),
   list: () => import("./commands/list.js"),
   whois: () => import("./commands/whois.js"),
   claim: () => import("./commands/claim.js"),
@@ -55,6 +57,7 @@ async function main(): Promise<number> {
     return EXIT.ERR;
   }
   try {
+    if (cmd === "doctor") validateDoctorArgs(rest);
     const mod = await loader();
     return await mod.default(parseFlags(rest));
   } catch (e) {

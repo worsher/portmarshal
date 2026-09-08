@@ -52,7 +52,3 @@ that target. Existing user authorization remains valid; do not ask for it a seco
 
 Stop exit codes: 0 completed, 2 no listener, 3 blocked. Diagnose cleanup with `gc --dry-run`; plain `gc`
 can release stale claims. Doctor never repairs permissions, migrates state, releases claims or stops services.
-
-
-Claude Code: do not assume `${CLAUDE_SESSION_ID}` skill substitution is exported to the shell.
-This adapter uses an existing explicit owner or project-level fallback; it does not install a session hook.

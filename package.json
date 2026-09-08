@@ -1,6 +1,6 @@
 {
   "name": "portmarshal",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "publishConfig": {
     "access": "public"
   },
@@ -11,8 +11,16 @@
   },
   "files": [
     "dist",
+    "integrations",
+    "docs/doctor.md",
+    "docs/specs",
+    "docs/plans",
+    "docs/acceptance",
+    "docs/demo.gif",
     "README.md",
-    "LICENSE"
+    "README.zh-CN.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "license": "MIT",
   "repository": {
@@ -43,7 +51,7 @@
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "pnpm build && pnpm test",
-    "test": "tsx --test tests/owner.test.ts tests/scan.test.ts tests/services.test.ts tests/list.test.ts tests/registry.test.ts tests/merge.test.ts tests/stop.test.ts tests/menubar.test.ts tests/render.test.ts tests/flags.test.ts tests/redact.test.ts tests/run.test.ts tests/runmarker.test.ts tests/runlog.test.ts tests/ready.test.ts tests/logs.test.ts tests/release.test.ts tests/gc.test.ts",
+    "test": "tsx --test tests/owner.test.ts tests/scan.test.ts tests/services.test.ts tests/list.test.ts tests/registry.test.ts tests/merge.test.ts tests/stop.test.ts tests/menubar.test.ts tests/render.test.ts tests/flags.test.ts tests/redact.test.ts tests/run.test.ts tests/runmarker.test.ts tests/runlog.test.ts tests/ready.test.ts tests/logs.test.ts tests/release.test.ts tests/gc.test.ts tests/doctor-registry.test.ts tests/doctor-scan.test.ts tests/doctor.test.ts",
     "smoke": "pnpm build && tsx --test tests/smoke.test.ts"
   },
   "devDependencies": {
