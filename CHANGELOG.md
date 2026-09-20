@@ -1,12 +1,13 @@
 # Changelog
 
-## 0.9.0 — Unreleased
+## 0.9.0 — 2026-09-20
 
 - Add read-only `doctor [--project DIR] [--json]` with runtime, scanner, registry, owner and service findings, a versioned report, and explicit incomplete-evidence handling
 - Observe registry permissions, legacy state and locks without migration, chmod, backups or cleanup; bound reads and distinguish malformed state from first use
 - Preserve probe outcomes and deadlines; skip Docker/PM2 client execution during doctor and suppress conclusions unsupported by listener, ownership or liveness evidence
 - Ship self-contained Codex/Claude Code skills and a Cursor rule, with stable-owner guidance, detached startup, readiness, logs and guarded-stop examples
 - Include integration guides and diagnostic documentation in the npm package; retain existing command, ownership and stop semantics
+- Validation limitation: fresh-session instruction loading in Codex, Claude Code and Cursor has not been verified; adapters are manually installed guidance, with CLI lifecycle and owner guards tested separately
 
 ## 0.8.1 — 2026-09-03
 
